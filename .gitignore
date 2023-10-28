@@ -1,1 +1,6 @@
 venv/*
+*.zip
+*.pyc
+events*
+.vscode/
+*.csv
