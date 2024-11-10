@@ -1,0 +1,162 @@
+import pandas as pd
+import numpy as np
+import mplfinance as mpf
+import matplotlib.pyplot as plt
+import math
+import glob
+import json
+import re
+
+class reader:
+    def __init__(self, ccy='EURUSD'):
+        self.ccy = ccy
+        self.fx= pd.read_csv(f'files/ccy/{ccy}.csv',  names =['dt', 'tm', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        self.fx['Date'] = pd.to_datetime(self.fx['dt'] + ' ' + self.fx['tm'])
+
+        self.fx.replace([np.inf, -np.inf], np.nan, inplace=True)
+        self.fx.dropna(inplace=True)
+        self.fx.reset_index(inplace=True)
+        self.fx = self.fx.set_index('Date')[['Open', 'High', 'Low', 'Close', 'Volume']]
+        self.fxs = {}
+        self.chart_fxs = {}
+        self.instrument_sentiment = {}
+        self.INSTRUMENTS= json.load(open('src/maps/INSTRUMENT_MAP.json'))
+
+        self.load_etoro()
+        
+    def load_etoro(self):
+        
+        for f in sorted(glob.glob('files/etoro/*.json')):
+            dt = re.findall(r'\d+', f)[0]
+            with open(f, 'r') as ifile:
+                s = ifile.read()
+            if not s.endswith(']'):
+                idx = s.rfind("}")
+                s = s[:idx+1] + ']'
+
+            js = json.loads(s)
+            for info in js:
+                instrument_id = info['instrumentId']
+                if not instrument_id in self.instrument_sentiment:
+                    self.instrument_sentiment[instrument_id] = []
+                info['date'] = dt
+                self.instrument_sentiment[instrument_id].append(info)
+
+
+    def resample(self, tf):
+        """
+        # '15T': 15-minute intervals.
+        # '30T': 30-minute intervals.
+        # '4H': 4-hour intervals.
+        # '1D': : Daily intervals.
+        """
+        if not tf in self.fxs:    
+            self.fxs[tf] = self.fx.resample(tf).agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+        return self.fxs[tf]
+    
+    def chart_fx(self, tf=None):
+        if not tf in self.chart_fxs:
+            if tf is not None:
+                self.chart_fxs[tf] = self.resample(tf)
+            else:
+                self.chart_fxs[tf] = self.fx
+        return self.chart_fxs[tf]
+
+    def visualize_peak(self, idx, chart_size= 50, tf=None):
+        if idx < chart_size or idx + chart_size > len( self.chart_fx(tf)):
+            return
+        marker_price = self.chart_fx(tf).iloc[idx]['High']
+
+        fig, axlist = mpf.plot(self.chart_fx(tf).iloc[idx-chart_size:idx+chart_size+1], type='candle', style='charles', volume=True, 
+                            title='OHLC Chart with Marker', ylabel='Price', ylabel_lower='Volume', 
+                            returnfig=True)
+
+        axlist[0].plot(chart_size, marker_price, 'x', color='red', markersize=12, label='Marker at x')
+        plt.show()
+
+    def visualize_2peak(self, idx, idx2, chart_size= 50, tf=None):
+        if idx < chart_size or idx2 + chart_size > len( self.chart_fx(tf)):
+            print(idx, chart_size)
+            print(idx2, len( self.chart_fx(tf)))
+            return
+        marker_price = self.chart_fx(tf).iloc[idx]['High']
+        marker_price2 = self.chart_fx(tf).iloc[idx2]['High']
+        
+        fig, axlist = mpf.plot(self.chart_fx(tf).iloc[idx-chart_size:idx2+chart_size+1], type='candle', style='charles', volume=True, 
+                            title='OHLC Chart with Marker', ylabel='Price', ylabel_lower='Volume', 
+                            returnfig=True)
+
+        new_idx = chart_size
+        new_idx2 = chart_size + (idx2- idx)
+        slope = (marker_price2 - marker_price) / (idx2 - idx)
+        # y = mx + b
+        # marker_price =  slope * chart_size + b
+        
+        b =  marker_price - slope* chart_size
+        c = slope* (new_idx2 + chart_size) + b
+
+        # to maintain chart size
+        new_b = self.chart_fx(tf).iloc[idx-chart_size:idx2+chart_size+1].High.max()
+        new_b = math.ceil(new_b * 1000) / 1000
+        new_c = self.chart_fx(tf).iloc[idx-chart_size:idx2+chart_size+1].Low.min()
+        new_c = math.floor(new_c * 1000) / 1000
+        
+        new_x2 =  (new_c - b )//slope
+        new_c =  slope*new_x2 + b
+        x2 = new_idx2 + chart_size
+        if c < new_c:
+            c = new_c
+            x2 = new_x2
+
+        # new_b  =  slope * new_x + b
+        new_x =  (new_b - b )//slope
+        new_b =  slope*new_x + b
+        x = 0
+        if b  > new_b:
+            b = new_b
+            x = new_x
+
+        axlist[0].plot([x, x2], [b, c], color='blue', linewidth=2, linestyle='--', label='Diagonal Line')
+        axlist[0].plot(new_idx, marker_price, 'x', color='red', markersize=12, label='Marker at x')
+        axlist[0].plot(new_idx2, marker_price2, 'x', color='red', markersize=12, label='Marker at x')
+        plt.show()
+
+
+    def visualize_sentiment(self):
+        instrumentid = self.INSTRUMENTS.get(self.ccy)
+        df = self.resample('1D').copy()
+        dfx =pd.DataFrame(self.instrument_sentiment[instrumentid])
+        dfx['date'] = pd.to_datetime(dfx['date'], format='%Y%m%d')
+
+        dfx.set_index('date', inplace=True)
+        df2 = df[df.index.isin(dfx.index)]
+        dfx2 = dfx[dfx.index.isin(df2.index)]
+
+        fig, axlist = mpf.plot(df2, type='candle', style='charles', volume=True, 
+                            title='OHLC Chart with Marker', ylabel='Price', ylabel_lower='Volume', 
+                            returnfig=True, figscale=1.5, figratio=(16, 9))
+
+        ax_secondary = axlist[0].twinx()  # Create a secondary y-axis
+
+        # Plot sentiment data on the secondary y-axis
+        ax_secondary.plot( list(range(len(df2.index))), dfx2.buy , color='purple', linestyle='--', label='Buy Sentiment')
+        ax_secondary.set_ylabel('Buy Sentiment')
+        ax_secondary.spines['right'].set_color('purple')  # Color the secondary axis to match the data
+        ax_secondary.tick_params(axis='y', colors='purple')
+
+        # Display legend for the secondary y-axis
+        ax_secondary.legend(loc='upper left')
+
+if __name__ == '__main__':
+
+    from scipy.signal import find_peaks
+    r = reader('EURUSD')
+    df = r.fx
+    arr, info = find_peaks(df.High, prominence=0.003)
+    arr2 = [x for x in arr if x > 2000 ]
+    
+    for x, y in zip(arr2, arr2[1:]):
+        if df.High.iloc[x] >  df.High.iloc[y]:
+            r.visualize_2peak( x, y, 2000)
+            
+

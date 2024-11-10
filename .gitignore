@@ -4,3 +4,4 @@ venv/*
 events*
 .vscode/
 *.csv
+files/*
