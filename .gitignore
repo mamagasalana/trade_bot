@@ -5,3 +5,6 @@ events*
 .vscode/
 *.csv
 files/*
+src/csv/hwqnghwgflanliuvfgqe/*
+*.ipynb
+test.py

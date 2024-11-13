@@ -133,7 +133,7 @@ class reader:
         dfx2 = dfx[dfx.index.isin(df2.index)]
 
         fig, axlist = mpf.plot(df2, type='candle', style='charles', volume=True, 
-                            title='OHLC Chart with Marker', ylabel='Price', ylabel_lower='Volume', 
+                            title='OHLC Chart with Sentiment', ylabel='Price', ylabel_lower='Volume', 
                             returnfig=True, figscale=1.5, figratio=(16, 9))
 
         ax_secondary = axlist[0].twinx()  # Create a secondary y-axis
