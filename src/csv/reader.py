@@ -9,21 +9,57 @@ import re
 
 class reader:
     def __init__(self, ccy='EURUSD'):
-        self.ccy = ccy
-        self.fx= pd.read_csv(f'files/ccy/{ccy}.csv',  names =['dt', 'tm', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        self.fx['Date'] = pd.to_datetime(self.fx['dt'] + ' ' + self.fx['tm'])
-
-        self.fx.replace([np.inf, -np.inf], np.nan, inplace=True)
-        self.fx.dropna(inplace=True)
-        self.fx.reset_index(inplace=True)
-        self.fx = self.fx.set_index('Date')[['Open', 'High', 'Low', 'Close', 'Volume']]
-        self.fxs = {}
-        self.chart_fxs = {}
+        self.ccy = None #active currency
+        self.ccys = {}
+        self._fxs = {}
+        self._chart_fxs = {}
         self.instrument_sentiment = {}
         self.INSTRUMENTS= json.load(open('src/maps/INSTRUMENT_MAP.json'))
 
+        self.load_currency(ccy)
         self.load_etoro()
-        
+        self.load_forexfactory()
+
+    @property
+    def fx(self):
+        return self.ccys[self.ccy]
+    
+    @property
+    def fxs(self):
+        if not self.ccy in self._fxs:
+            self._fxs[self.ccy] = {}
+        return self._fxs[self.ccy]
+    
+    @property
+    def chart_fxs(self):
+        if not self.ccy in self._chart_fxs:
+            self._chart_fxs[self.ccy] = {}
+        return self._chart_fxs[self.ccy]
+    
+    def query_ff(self, start_date, end_date):
+        ret1 = self.ff[(self.ff.currency==self.ccy[:3]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
+        ret2 = self.ff[(self.ff.currency==self.ccy[3:]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
+        return ret1, ret2
+    
+    def load_currency(self, ccy):
+        self.ccy = ccy # set active
+        if not ccy in self.ccys:
+            fx= pd.read_csv(f'files/ccy/{ccy}.csv',  names =['dt', 'tm', 'Open', 'High', 'Low', 'Close', 'Volume'])
+            fx['Date'] = pd.to_datetime(fx['dt'] + ' ' + fx['tm'])
+
+            fx.replace([np.inf, -np.inf], np.nan, inplace=True)
+            fx.dropna(inplace=True)
+            fx.reset_index(inplace=True)
+            fx = fx.set_index('Date')[['Open', 'High', 'Low', 'Close', 'Volume']]
+            self.ccys[ccy] = fx
+        return self.ccys[ccy]
+
+    def load_forexfactory(self):
+        df=  pd.read_csv('files/forexfactory/forexfactory_calendar.csv')
+        df = df[(df.time.str.contains('pm', na=False))  |(df.time.str.contains('am', na=False))]
+        df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %I:%M%p')
+        self.ff = df
+
     def load_etoro(self):
         
         for f in sorted(glob.glob('files/etoro/*.json')):
