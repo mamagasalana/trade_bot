@@ -6,6 +6,7 @@ import math
 import glob
 import json
 import re
+from src.maps.config import *
 
 class reader:
     def __init__(self, ccy='EURUSD'):
@@ -55,10 +56,21 @@ class reader:
         return self.ccys[ccy]
 
     def load_forexfactory(self):
-        df=  pd.read_csv('files/forexfactory/forexfactory_calendar.csv')
-        df = df[(df.time.str.contains('pm', na=False))  |(df.time.str.contains('am', na=False))]
+        specs = []
+        js = json.load(open('src/maps/forexfactory_eventid.json'))
+        for k, v in js.items():
+            out = {v2['title']: v2['html'] for v2 in v}
+            out['eventid'] = int(k)
+            specs.append(out)
+        df_specs = pd.DataFrame(specs)
+        df_specs = df_specs[~df_specs['FF Notes'].str.contains("discontinue", na=False)].copy()
+        
+        df=  pd.read_csv(FILES)
+        df['time'] = df.time.fillna(method='ffill')
+        df = df.query("actual.notnull() and time.str.contains('am|pm', na=False)")
         df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %I:%M%p')
-        self.ff = df
+
+        self.ff = pd.merge(df, df_specs, on='eventid', how='inner')
 
     def load_etoro(self):
         
@@ -187,12 +199,14 @@ if __name__ == '__main__':
 
     from scipy.signal import find_peaks
     r = reader('EURUSD')
-    df = r.fx
-    arr, info = find_peaks(df.High, prominence=0.003)
-    arr2 = [x for x in arr if x > 2000 ]
+    r.ff.to_csv('test2.csv')
+    print('debug')
+    # df = r.fx
+    # arr, info = find_peaks(df.High, prominence=0.003)
+    # arr2 = [x for x in arr if x > 2000 ]
     
-    for x, y in zip(arr2, arr2[1:]):
-        if df.High.iloc[x] >  df.High.iloc[y]:
-            r.visualize_2peak( x, y, 2000)
+    # for x, y in zip(arr2, arr2[1:]):
+    #     if df.High.iloc[x] >  df.High.iloc[y]:
+    #         r.visualize_2peak( x, y, 2000)
             
 

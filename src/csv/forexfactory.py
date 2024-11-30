@@ -8,24 +8,10 @@ Created on Fri Nov  4 11:25:35 2022
 
 # https://trends.builtwith.com/websitelist/DataDome
 # Test websites from here
-
-
-import undetected_chromedriver as uc
-
-# Initializing driver 
-
+from chromedriver import CHROME
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait 
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import Select
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
-from selenium import webdriver
-from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
-import subprocess
-
-
-
 import os
 import random
 import time
@@ -35,74 +21,61 @@ import datetime
 import re
 from lxml import html
 import json
-# https://stackoverflow.com/questions/55582136/how-to-set-proxy-with-authentication-in-selenium-chromedriver-python
-
-FILES = r'files/forexfactory/forexfactory_calendar.csv'
+# https://stackoverflow.com/questions/55582136/how-to-set-proxy-with-authentication-in-selenium-chromedriver-python    
+from src.maps.config import *
 
 class ForexFactoryData:
     def __init__(self):
-        self.driver = self.launch_driver()
-
-    def launch_driver(self, folder=None):
-        subprocess.run(["pkill", "chrome"])
-        # prevent anti-bot guide
-        # https://piprogramming.org/articles/How-to-make-Selenium-undetectable-and-stealth--7-Ways-to-hide-your-Bot-Automation-from-Detection-0000000017.html
-        # https://www.zenrows.com/blog/selenium-avoid-bot-detection#alternatives-to-base-selenium
-
-        # # selenium-wire proxy settings
-        capa = DesiredCapabilities.CHROME
-        capa["pageLoadStrategy"] = "none"
-        # capa["unexpectedAlertBehaviour"] = "accept"
-        options = webdriver.ChromeOptions()
-
-        chromeprofile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hwqnghwgflanliuvfgqe")
-        if not os.path.exists(chromeprofile):
-            os.makedirs(chromeprofile)
-        
-        options.add_argument('--user-data-dir=' +chromeprofile)
-            
-        if folder:
-            prefs = {   'download.default_directory' : folder,
-                        "download.prompt_for_download": False,
-                        "download.directory_upgrade": True,
-                        "plugins.always_open_pdf_externally": True}
-            options.add_experimental_option('prefs', prefs)
-        
-        driver = uc.Chrome(options=options, desired_capabilities=capa) 
-        driver.maximize_window()
-        return driver
+        self.c = CHROME()
+        self.driver = self.c.launch_driver(sleep=False)
     
     def main(self, startdt = None):
+        
+        excl = []
+        if os.path.exists(FILES):
+            df_exist = pd.read_csv(FILES)
+            excl = df_exist.date.unique().tolist()
 
         if startdt is not None:
             dt = startdt
         else:
-            dt = datetime.datetime(2009,1,1)
+            dt = datetime.datetime(2014,1,1)
         dflist = []
 
         if dt > datetime.datetime.now():
+            print("Early exit")
             return dt
         
         try:
             while dt <= datetime.datetime.now():
-                dflist.append(self.get_historical(dt))
+                if dt.strftime('%Y-%m-%d') not in excl:
+                    dflist.append(self.get_historical(dt))
                 dt += datetime.timedelta(days=1)
         except Exception as e:
             print('############   Fail  ############')
             # print(e)
             print(dt)
 
-        df2 = pd.concat(dflist, ignore_index=True)
-        df2['datetime'] = pd.to_datetime(df2['date']+' ' +df2['time'], format='%Y-%m-%d %I:%M%p', errors='coerce')
-        if os.path.exists(FILES):
-            df_exist = pd.read_csv(FILES)
-            dffinal = pd.concat([df_exist, df2], axis=0)
-            dffinal.to_csv(FILES, index=False)
+        if dflist:
+            df2 = pd.concat(dflist, ignore_index=True)
         else:
-            df2.to_csv(FILES, index=False)
-        print('Done')
-        return dt
-    
+            df2 = pd.DataFrame()
+
+        if not df2.empty:
+            df2['datetime'] = pd.to_datetime(df2['date']+' ' +df2['time'], format='%Y-%m-%d %I:%M%p', errors='coerce')
+            if os.path.exists(FILES):
+                df_exist = pd.read_csv(FILES)
+                dffinal = pd.concat([df_exist, df2], axis=0)
+                dffinal.to_csv(FILES, index=False)
+            else:
+                df2.to_csv(FILES, index=False)
+        
+        if dt != startdt:
+            print("Resuming ...")
+            self.c.launch_driver()
+            self.main(dt)
+        print(dt, startdt)
+
     def get_historical(self, startdate):
         x1 = '//table[@class="calendar__table"]'
         if os.name == 'nt':
@@ -120,7 +93,7 @@ class ForexFactoryData:
         e1 = WebDriverWait(self.driver, 15).until(EC.visibility_of_element_located((By.XPATH, x1)))
         out = []
         for tr in e1.find_elements(By.XPATH, './/tr[@data-event-id]'):
-            out2=  {'date': startdate.strftime('%Y-%m-%d')}
+            out2=  {'date': startdate.strftime('%Y-%m-%d'), 'eventid': tr.get_attribute('data-event-id')}
 
             for attr in ['time', 'event', 'currency', 'actual', 'forecast', 'previous']:
                 x1 = f'.//td[contains(@class, "calendar__{attr}")]'
@@ -132,18 +105,49 @@ class ForexFactoryData:
 
         return pd.DataFrame(out)
 
+    def get_eventids(self):
+        URL = 'https://www.forexfactory.com/calendar/details/1-{id}'
+
+        def get_url(eventid):
+            self.driver.get('about:blank')
+            self.driver.get(URL.format(id=eventid))
+            WebDriverWait(self.driver, 30).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+            json_pre_tag = WebDriverWait(self.driver, 30).until(
+                EC.presence_of_element_located((By.TAG_NAME, "pre")))
+            # Extract the JSON text
+            js = json.loads(json_pre_tag.text)
+            return js['data']['specs']
+
+        out = {}
+        if os.path.exists(FILES_EVENTID):
+            out = json.load(open(FILES_EVENTID))
+        
+        df = pd.read_csv('files/forexfactory/forexfactory_calendar.csv')
+        eventids = df.eventid.unique().tolist()
+        for eventid in eventids:
+            if str(eventid) in out:
+                continue
+
+            for _ in range(3):
+                try:
+                    ret = get_url(eventid)
+                    break
+                except:
+                    with open(FILES_EVENTID, 'w') as ifile:
+                        ifile.write(json.dumps(out))
+                    self.c.launch_driver()
+
+            out[eventid] = ret
+
+        
+        with open(FILES_EVENTID, 'w') as ifile:
+            ifile.write(json.dumps(out))
+        print('debug')
+
 if __name__ == '__main__':
     app = ForexFactoryData()
-
-    dt= datetime.datetime(2009,1,1)
-
-    while True:
-        dt2 = app.main(dt)
-
-        if dt2 ==dt:
-            break
-        
-        app.driver = app.launch_driver()
-        dt =dt2
-
-    print('Done')
+    dt= datetime.datetime(2024,8,1)
+    # app.main(dt)
+    app.get_eventids()
