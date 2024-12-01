@@ -7,6 +7,8 @@ import glob
 import json
 import re
 from src.maps.config import *
+import src.maps.economic_classification as econ_class
+from  src.maps.economic_classification import *
 
 class reader:
     def __init__(self, ccy='EURUSD'):
@@ -37,11 +39,25 @@ class reader:
             self._chart_fxs[self.ccy] = {}
         return self._chart_fxs[self.ccy]
     
-    def query_ff(self, start_date, end_date):
-        ret1 = self.ff[(self.ff.currency==self.ccy[:3]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
-        ret2 = self.ff[(self.ff.currency==self.ccy[3:]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
+    def query_ff(self, start_date=None, end_date=None):
+        if start_date is None or end_date is None:
+            ret1 = self.ff[(self.ff.currency==self.ccy[:3])].copy()
+            ret2 = self.ff[(self.ff.currency==self.ccy[3:])].copy()
+        else:
+            ret1 = self.ff[(self.ff.currency==self.ccy[:3]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
+            ret2 = self.ff[(self.ff.currency==self.ccy[3:]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
         return ret1, ret2
     
+    def event_metadata(self):
+        out = []
+        for ret in self.query_ff():
+            event_min = ret.groupby('event')['datetime'].min()
+            event_max = ret.groupby('event')['datetime'].max()
+            merged = pd.concat([event_min, event_max], axis=1)
+            merged.columns = ['min', 'max']
+            out.append(merged)
+        return out
+            
     def load_currency(self, ccy):
         self.ccy = ccy # set active
         if not ccy in self.ccys:
@@ -64,12 +80,15 @@ class reader:
             specs.append(out)
         df_specs = pd.DataFrame(specs)
         df_specs = df_specs[~df_specs['FF Notes'].str.contains("discontinue", na=False)].copy()
-        
+
         df=  pd.read_csv(FILES)
         df['time'] = df.time.fillna(method='ffill')
-        df = df.query("actual.notnull() and time.str.contains('am|pm', na=False)")
-        df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %I:%M%p')
+        df = df.query("actual.notnull() and time.str.contains('am|pm', na=False)").copy()
+        df.loc[:, 'datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %I:%M%p')
 
+        module_contents = [x for x in dir(econ_class) if not x.startswith('__')]
+        econ_classification = { y:x  for x in module_contents for y in eval(x)}
+        df.loc[:, 'eclass']  =df.event.map(econ_classification)
         self.ff = pd.merge(df, df_specs, on='eventid', how='inner')
 
     def load_etoro(self):
