@@ -2,6 +2,12 @@
 from scipy.signal import find_peaks
 import pandas as pd
 import datetime
+import re
+import numpy as np
+from scipy.cluster.hierarchy import dendrogram, linkage, cophenet, fcluster
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 def optimum_size(arr, interval = 0.0005):
     
@@ -30,7 +36,7 @@ def cumsum(arr: pd.Series, threshold=0.05):
 
     for idx, (dt, price) in enumerate(df.items()):
         if pd.isnull(price):
-            out.append(dt)
+            out.append((dt, None))
             continue
 
         if change is None:
@@ -39,18 +45,19 @@ def cumsum(arr: pd.Series, threshold=0.05):
             change*= (1+price)
 
         if abs(change -1) >= threshold:
+            out.append((dt, (change -1)>0 ))
             change = None
-            out.append(dt)
+            
 
     return out
 
 def effective_cumsum(arr: pd.Series, threshold=0.05):
     from_cumsum = cumsum(arr, threshold)
-    
+
     # TODO
 
     
-def cumsum_analysis(currency, threshold=0.05):
+def cumsum_analysis(currency, threshold=0.05, raw=False):
     from src.csv.reader import reader
 
     r = reader(currency)
@@ -59,9 +66,9 @@ def cumsum_analysis(currency, threshold=0.05):
     excl_all = r.event_metadata()
 
     ret = {}
-    for dt1 , dt2 in zip(out, out[1:]):
+    for (dt1, _) , (dt2, changes) in zip(out, out[1:]):
         k = (dt1, dt2)
-        ret[k] = {}
+        ret[k] = {(None, None, 'changes') : {'changes' : [int(changes)]}}
 
     for event, excl in zip(events, excl_all):
         for r in event.iterrows():
@@ -70,29 +77,112 @@ def cumsum_analysis(currency, threshold=0.05):
                 continue
             for k, v in ret.items():
                 dt1, dt2 = k
-                k2 = (row.currency, row.event)
+                k2 = (row.currency, row.eclass,  row.event)
                 if not k2 in v:
                     v[k2] = {}
                     v[k2]['data'] = []
 
                 if row.datetime < dt1:
-                    v[k2]['before'] = row.actual
+                    v[k2]['before'] = [row.actual]
                     continue
 
                 if row.datetime > dt2:
                     if not 'after' in v[k2]:
-                        v[k2]['after'] = row.actual
+                        v[k2]['after'] = [row.actual]
                     continue
                 
                 v[k2]['data'].append(row.actual)
 
     frames = []
+    methods = ['sum', 'mean', 'slope', 'std_dev']
     for idx, data in ret.items():
-        
-        series = pd.Series(data, name=idx)
-        df = series.apply(pd.Series)[['before', 'data', 'after']].T
+        data2 = {k: [y for x in v.values() for y in x] for k, v in data.items()}
+        if not raw:
+            data3 = {}
+            for k, v in data2.items():
+                if 'changes' in k:
+                    k2= (None, None, None, 'changes')
+                    data3[k2] = v[0]
+                    continue
+
+                method_ret = apply_methodologies(parse_list(v))
+                for method, mret in zip(methods, method_ret):
+                    k2 = k + (method, )
+                    data3[k2] = mret
+        else:
+            data3 = data2
         idx2 = '-'.join([dt.strftime('%Y-%m-%d %H:%M:%S') for dt in idx])
-        df.index =  pd.MultiIndex.from_product([[idx2], df.index]) 
+        df = pd.Series(data3, name=idx2)
         frames.append(df)
     
-    return pd.concat(frames)
+    return pd.concat(frames,axis=1)
+
+
+def parse_list(cell):
+    try:
+        ret = []
+        for x in cell:
+            x =str(x)
+            if  '|' in x:
+                x = x.split('|')[0]
+
+            mult = 1
+            if 'k' in x.lower():
+                mult = 1e3
+            elif 'b' in x.lower():
+                mult = 1e9
+            elif 'm' in x.lower():
+                mult = 1e6
+
+            x = re.findall('[-\.\d]+',x)[0]
+            ret.append(float(x)*mult)
+        return ret
+    except Exception as e :
+        return str(e)
+    
+def apply_methodologies(data_in: list):
+    """
+    Choosing the Methodology
+    1. Use cumulative metrics (e.g., product, returns) if compounding or cumulative effects matter.
+    2. Use averages (mean, median) for central tendencies.
+    3. Explore trends (slope, rolling stats) for directional or time-series data.
+    4. Incorporate variability (standard deviation, entropy) if spread matters.
+    """
+    _sum = sum(data_in)
+    _mean = np.mean(data_in)
+    slope = np.polyfit(range(len(data_in)), data_in, 1)[0]
+    std_dev = np.std(data_in)
+
+    return _sum, _mean, slope, std_dev
+
+def get_dendrogram(df, method='sum'):
+
+    """
+    input from cumsum analysis?
+    """
+    scaler = StandardScaler()
+    X = df[df.index.get_level_values(-1) == method]
+    X_scaled = scaler.fit_transform(X)
+    X_scaled = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
+
+    hier_comp = linkage(X_scaled, method='complete', metric='euclidean')
+    plt.figure(figsize=(100, 80))
+    plt.title('Dendrogram of FX Indicators', fontsize=14)
+    plt.xlabel('Distance', fontsize=20)
+    plt.ylabel('Indicator', fontsize=20)
+    dendrogram(
+        hier_comp,
+        orientation='right',
+        #     leaf_rotation=90.,
+        leaf_font_size=20,
+        labels=X.index.values,
+        color_threshold=3
+    )
+    fig = plt.gcf()
+    plt.close(fig)  # Prevent immediate display of the plot
+    return fig
+
+if __name__ == '__main__':
+    from src.pattern.functions import cumsum_analysis
+    df = cumsum_analysis('EURUSD')
+    df.to_csv('review.csv')
