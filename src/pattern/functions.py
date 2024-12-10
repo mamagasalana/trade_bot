@@ -9,6 +9,7 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+METHODS =['sum', 'mean', 'slope', 'std_dev']
 def optimum_size(arr, interval = 0.0005):
     
     mem = []
@@ -94,7 +95,7 @@ def cumsum_analysis(currency, threshold=0.05, raw=False):
                 v[k2]['data'].append(row.actual)
 
     frames = []
-    methods = ['sum', 'mean', 'slope', 'std_dev']
+    
     for idx, data in ret.items():
         data2 = {k: [y for x in v.values() for y in x] for k, v in data.items()}
         if not raw:
@@ -106,7 +107,7 @@ def cumsum_analysis(currency, threshold=0.05, raw=False):
                     continue
 
                 method_ret = apply_methodologies(parse_list(v))
-                for method, mret in zip(methods, method_ret):
+                for method, mret in zip(METHODS, method_ret):
                     k2 = k + (method, )
                     data3[k2] = mret
         else:
@@ -155,32 +156,42 @@ def apply_methodologies(data_in: list):
 
     return _sum, _mean, slope, std_dev
 
-def get_dendrogram(df, method='sum'):
+def get_dendrogram(df, distance_threshold=5, method=None, fig=False):
 
     """
+    method : sum, mean, slope, std_dev (see METHODS)
     input from cumsum analysis?
     """
     scaler = StandardScaler()
-    X = df[df.index.get_level_values(-1) == method]
+    if method:
+        assert method in METHODS , f"method should exist in {METHODS}"
+        X = df[df.index.get_level_values(-1) == method]
+    else:
+        X = df
     X_scaled = scaler.fit_transform(X)
     X_scaled = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
 
     hier_comp = linkage(X_scaled, method='complete', metric='euclidean')
-    plt.figure(figsize=(100, 80))
-    plt.title('Dendrogram of FX Indicators', fontsize=14)
-    plt.xlabel('Distance', fontsize=20)
-    plt.ylabel('Indicator', fontsize=20)
-    dendrogram(
-        hier_comp,
-        orientation='right',
-        #     leaf_rotation=90.,
-        leaf_font_size=20,
-        labels=X.index.values,
-        color_threshold=3
-    )
-    fig = plt.gcf()
-    plt.close(fig)  # Prevent immediate display of the plot
-    return fig
+    if not fig:
+        clusters = fcluster(hier_comp, t=distance_threshold, criterion='distance')
+        X['cluster'] = clusters
+        return X['cluster']
+    else:
+        plt.figure(figsize=(100, 80))
+        plt.title('Dendrogram of FX Indicators', fontsize=14)
+        plt.xlabel('Distance', fontsize=20)
+        plt.ylabel('Indicator', fontsize=20)
+        dendrogram(
+            hier_comp,
+            orientation='right',
+            #     leaf_rotation=90.,
+            leaf_font_size=20,
+            labels=X.index.values,
+            color_threshold=3
+        )
+        fig = plt.gcf()
+        plt.close(fig)  # Prevent immediate display of the plot
+        return fig
 
 if __name__ == '__main__':
     from src.pattern.functions import cumsum_analysis
