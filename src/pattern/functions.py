@@ -123,24 +123,31 @@ def parse_list(cell):
     try:
         ret = []
         for x in cell:
-            x =str(x)
-            if  '|' in x:
-                x = x.split('|')[0]
-
-            mult = 1
-            if 'k' in x.lower():
-                mult = 1e3
-            elif 'b' in x.lower():
-                mult = 1e9
-            elif 'm' in x.lower():
-                mult = 1e6
-
-            x = re.findall('[-\.\d]+',x)[0]
-            ret.append(float(x)*mult)
+            ret.append(parse_format(x))
         return ret
     except Exception as e :
         return str(e)
-    
+
+def parse_format(x):
+    x =str(x)
+    if  '|' in x:
+        x = x.split('|')[0]
+
+    mult = 1
+    if 'k' in x.lower():
+        mult = 1e3
+    elif 'b' in x.lower():
+        mult = 1e9
+    elif 'm' in x.lower():
+        mult = 1e6
+
+    try:
+        x = re.findall('[-\.\d]+',x)[0]
+    except Exception as e:
+        print("%s has error" % x)
+        raise e
+    return float(x)*mult
+
 def apply_methodologies(data_in: list):
     """
     Choosing the Methodology

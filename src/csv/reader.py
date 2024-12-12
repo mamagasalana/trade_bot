@@ -83,7 +83,7 @@ class reader:
 
         df=  pd.read_csv(FILES)
         df['time'] = df.time.fillna(method='ffill')
-        df = df.query("actual.notnull() and time.str.contains('am|pm', na=False)").copy()
+        df = df.query("actual.notnull() and actual!='Pass' and time.str.contains('am|pm', na=False)").copy()
         df.loc[:, 'datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %I:%M%p')
 
         module_contents = [x for x in dir(econ_class) if not x.startswith('__')]
