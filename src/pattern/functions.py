@@ -8,6 +8,7 @@ from scipy.cluster.hierarchy import dendrogram, linkage, cophenet, fcluster
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
+from src.csv.reader import reader
 
 METHODS =['sum', 'mean', 'slope', 'std_dev']
 def optimum_size(arr, interval = 0.0005):
@@ -59,12 +60,10 @@ def effective_cumsum(arr: pd.Series, threshold=0.05):
 
     
 def cumsum_analysis(currency, threshold=0.05, raw=False):
-    from src.csv.reader import reader
-
     r = reader(currency)
     out =cumsum(r.fx.Close[r.fx.index > datetime.datetime(2010,1,1)], threshold)
-    events = r.query_ff()
-    excl_all = r.event_metadata()
+    events = r.query_ff_current()
+    excl_all = [r.event_metadata(currency[:3]),r.event_metadata(currency[3:])]
 
     ret = {}
     for (dt1, _) , (dt2, changes) in zip(out, out[1:]):
@@ -199,6 +198,28 @@ def get_dendrogram(df, distance_threshold=5, method=None, fig=False):
         fig = plt.gcf()
         plt.close(fig)  # Prevent immediate display of the plot
         return fig
+
+def get_corr(ccy='EUR'):
+    r = reader()
+    df = r.ff
+    excl = r.event_metadata(ccy)
+    filter = excl[excl['min'] > datetime.datetime(2010,1,1)].index
+
+    date_range_first_day = pd.date_range(start="2009-01-01", end="2023-12-31", freq="D")
+    df_full = pd.DataFrame({"datetime": date_range_first_day})
+
+    df_ccy = df[(df.currency==ccy) & ~(df.event.isin(filter))][['event', 'datetime', 'actual']]
+    df_ccy['datetime'] = df_ccy['datetime'].apply(lambda x :x.replace(hour=0, minute=0, second=0))
+    df_ccy['actual'] = df_ccy['actual'].apply(parse_format)
+
+    df_pivot= df_ccy.pivot(columns='event', values='actual')
+    df_pivot.index=  df_ccy['datetime']
+    df_pivot_no_na = df_pivot.groupby('datetime').mean().reset_index()
+
+    ret = df_full.merge(df_pivot_no_na,how='left', on='datetime').fillna(method='ffill')
+    ret=  ret[ret.datetime > datetime.datetime(2010,1,1)].drop('datetime', axis=1)
+    return ret.corr()
+
 
 if __name__ == '__main__':
     from src.pattern.functions import cumsum_analysis

@@ -11,7 +11,7 @@ import src.maps.economic_classification as econ_class
 from  src.maps.economic_classification import *
 
 class reader:
-    def __init__(self, ccy='EURUSD'):
+    def __init__(self, ccy=None):
         self.ccy = None #active currency
         self.ccys = {}
         self._fxs = {}
@@ -19,7 +19,8 @@ class reader:
         self.instrument_sentiment = {}
         self.INSTRUMENTS= json.load(open('src/maps/INSTRUMENT_MAP.json'))
 
-        self.load_currency(ccy)
+        if ccy is not None:
+            self.load_currency(ccy)
         self.load_etoro()
         self.load_forexfactory()
 
@@ -39,24 +40,25 @@ class reader:
             self._chart_fxs[self.ccy] = {}
         return self._chart_fxs[self.ccy]
     
-    def query_ff(self, start_date=None, end_date=None):
-        if start_date is None or end_date is None:
-            ret1 = self.ff[(self.ff.currency==self.ccy[:3])].copy()
-            ret2 = self.ff[(self.ff.currency==self.ccy[3:])].copy()
-        else:
-            ret1 = self.ff[(self.ff.currency==self.ccy[:3]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
-            ret2 = self.ff[(self.ff.currency==self.ccy[3:]) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
-        return ret1, ret2
+    def query_ff_current(self):
+        ccy1 =self.ccy[:3]
+        ccy2 = self.ccy[3:]
+        return self.query_ff(ccy1), self.query_ff(ccy2)
     
-    def event_metadata(self):
-        out = []
-        for ret in self.query_ff():
-            event_min = ret.groupby('event')['datetime'].min()
-            event_max = ret.groupby('event')['datetime'].max()
-            merged = pd.concat([event_min, event_max], axis=1)
-            merged.columns = ['min', 'max']
-            out.append(merged)
-        return out
+    def query_ff(self, ccy, start_date=None, end_date=None):
+        if start_date is None or end_date is None:
+            ret1 = self.ff[(self.ff.currency==ccy)].copy()
+        else:
+            ret1 = self.ff[(self.ff.currency==ccy) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
+        return ret1
+    
+    def event_metadata(self, ccy):
+        ret = self.query_ff(ccy)
+        event_min = ret.groupby('event')['datetime'].min()
+        event_max = ret.groupby('event')['datetime'].max()
+        merged = pd.concat([event_min, event_max], axis=1)
+        merged.columns = ['min', 'max']
+        return merged
             
     def load_currency(self, ccy):
         self.ccy = ccy # set active
