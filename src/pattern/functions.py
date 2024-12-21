@@ -199,7 +199,7 @@ def get_dendrogram(df, distance_threshold=5, method=None, fig=False):
         plt.close(fig)  # Prevent immediate display of the plot
         return fig
 
-def get_corr(ccy='EUR'):
+def get_corr(ccy='EUR', pivot=False):
     r = reader()
     df = r.ff
     excl = r.event_metadata(ccy)
@@ -218,7 +218,28 @@ def get_corr(ccy='EUR'):
 
     ret = df_full.merge(df_pivot_no_na,how='left', on='datetime').fillna(method='ffill')
     ret=  ret[ret.datetime > datetime.datetime(2010,1,1)].drop('datetime', axis=1)
-    return ret.corr()
+    if pivot:
+        return ret
+    else:
+        return ret.corr()
+
+
+def plot_chart_in_the_same_cluster(ccy, thres=6, scaled=False):
+    df = get_corr(ccy)
+    dp = get_corr(ccy, pivot=True)
+    df2 = get_dendrogram(df, distance_threshold=thres)
+    scaler = StandardScaler()
+
+    for i in range(1, df2.max()):
+        selected_ind = df2[df2==i].index
+        if scaled:
+            X = dp[selected_ind]
+            X_scaled = scaler.fit_transform(X)
+            X_scaled = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
+            X_scaled.plot(kind='line')
+        else:
+            dp[selected_ind].plot(kind='line')
+
 
 
 if __name__ == '__main__':
