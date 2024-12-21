@@ -9,6 +9,8 @@ import re
 from src.maps.config import *
 import src.maps.economic_classification as econ_class
 from  src.maps.economic_classification import *
+from src.pattern.functions import parse_format
+import datetime
 
 class reader:
     def __init__(self, ccy=None):
@@ -111,6 +113,34 @@ class reader:
                 info['date'] = dt
                 self.instrument_sentiment[instrument_id].append(info)
 
+    def get_corr(self, ccy, format=2):
+        """
+        0 -  returns with date
+        1 - drops date
+        2 - return correlation
+        """
+        excl = self.event_metadata(ccy)
+        filter = excl[excl['min'] > datetime.datetime(2010,1,1)].index
+
+        date_range_first_day = pd.date_range(start="2009-01-01", end="2023-12-31", freq="D")
+        df_full = pd.DataFrame({"datetime": date_range_first_day})
+
+        df_ccy = self.ff[(self.ff.currency==ccy) & ~(self.ff.event.isin(filter))][['event', 'datetime', 'actual']]
+        df_ccy['datetime'] = df_ccy['datetime'].apply(lambda x :x.replace(hour=0, minute=0, second=0))
+        df_ccy['actual'] = df_ccy['actual'].apply(parse_format)
+
+        df_pivot= df_ccy.pivot(columns='event', values='actual')
+        df_pivot.index=  df_ccy['datetime']
+        df_pivot_no_na = df_pivot.groupby('datetime').mean().reset_index()
+
+        ret = df_full.merge(df_pivot_no_na,how='left', on='datetime').fillna(method='ffill')
+        ret=  ret[ret.datetime > datetime.datetime(2010,1,1)]
+        if format == 0:
+            return ret
+        elif format ==1:
+            return ret.drop('datetime', axis=1)
+        else:
+            return ret.drop('datetime', axis=1).corr()
 
     def resample(self, tf):
         """
