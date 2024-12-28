@@ -99,9 +99,18 @@ def apply_methodologies(data_in: list):
     4. Incorporate variability (standard deviation, entropy) if spread matters.
     """
     _sum = sum(data_in)
-    _mean = np.mean(data_in)
-    slope = np.polyfit(range(len(data_in)), data_in, 1)[0]
-    std_dev = np.std(data_in)
+    if not data_in:
+        _mean = 0
+        std_dev = 0
+    else:
+        _mean = np.mean(data_in)
+        std_dev = np.std(data_in)
+
+    if len(data_in) < 2:
+        slope=  0
+    else:
+        slope = np.polyfit(range(len(data_in)), data_in, 1)[0]
+    
 
     return _sum, _mean, slope, std_dev
 

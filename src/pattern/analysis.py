@@ -16,11 +16,21 @@ class ANALYSIS:
         self.excl2 = self.reader.event_metadata(ccy[3:])
 
         self.ca = self.cumsum_analysis()
-        
 
-    def cumsum_analysis(self, threshold=0.05, raw=False):
+    def cumsum_analysis(self, threshold=0.05, raw=False, mode=2, shift=0):
+        """
+        :param mode: 
+        -1 = before, between
+        0 = between
+        1 = after, between
+        2 = before, between, after
+        
+        :return: pandas DataFrame
+        """
         r = self.reader
-        out =cumsum(r.fx.Close[r.fx.index > datetime.datetime(2010,1,1)], threshold)
+        close = r.fx.Close.copy()
+        close2 = close.shift(shift).dropna()
+        out =cumsum(close2[close2.index > datetime.datetime(2010,1,1)], threshold)
 
         ret = {}
         for (dt1, _) , (dt2, changes) in zip(out, out[1:]):
@@ -40,12 +50,14 @@ class ANALYSIS:
                         v[k2]['data'] = []
 
                     if row.datetime < dt1:
-                        v[k2]['before'] = [row.actual]
+                        if mode in [-1, 2]:
+                            v[k2]['before'] = [row.actual]
                         continue
 
                     if row.datetime > dt2:
-                        if not 'after' in v[k2]:
-                            v[k2]['after'] = [row.actual]
+                        if mode in [1, 2]:
+                            if not 'after' in v[k2]:
+                                v[k2]['after'] = [row.actual]
                         continue
                     
                     v[k2]['data'].append(row.actual)
