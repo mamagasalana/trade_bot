@@ -77,7 +77,7 @@ class ANALYSIS:
         frames = []
         for k, v in ret.items():
             fname = '-'.join([dt.strftime('%Y-%m-%d %H:%M:%S') for dt in k])
-            frame = pd.concat(v)
+            frame = pd.concat([v2 for v2 in v if not v2.empty])
             frame.name = fname
             frames.append(frame)
             
@@ -122,4 +122,8 @@ class ANALYSIS:
 
 if __name__ == '__main__':
     a = ANALYSIS('EURUSD')
-    a.plot_chart_ccy_changes("USD")
+    a.optimized_cusum_analysis(threshold=0.03,mode =0, shift=-60)
+    # a.optimized_cusum_analysis(threshold=0.03,mode =1, shift=-60)
+    # a.optimized_cusum_analysis(threshold=0.03,mode =-1, shift=-60)
+    # a.optimized_cusum_analysis(threshold=0.03,mode =2, shift=-60)
+    # a.plot_chart_ccy_changes("USD")
