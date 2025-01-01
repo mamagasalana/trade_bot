@@ -86,14 +86,20 @@ class reader:
         df_specs = df_specs[~df_specs['FF Notes'].str.contains("discontinue", na=False)].copy()
 
         df=  pd.read_csv(FILES)
-        df['time'] = df.time.fillna(method='ffill')
-        df = df.query("actual.notnull() and actual!='Pass' and time.str.contains('am|pm', na=False)").copy()
+        df['time'] = df.time.ffill()
+        qry = ["actual.notnull()",
+               "actual.str.count('-')<2",
+               "actual.str.contains(r'\d', na=False)",
+               "time.str.contains('am|pm', na=False)"]
+
+        df = df.query(' and '.join(qry)).copy()
         df.loc[:, 'datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y-%m-%d %I:%M%p')
 
         module_contents = [x for x in dir(econ_class) if not x.startswith('__')]
         econ_classification = { y:x  for x in module_contents for y in eval(x)}
         df.loc[:, 'eclass']  =df.event.map(econ_classification)
         self.ff = pd.merge(df, df_specs, on='eventid', how='inner')
+        self.ff['actual'] = self.ff['actual'].apply(parse_format)
 
     def load_etoro(self):
         
@@ -127,7 +133,6 @@ class reader:
 
         df_ccy = self.ff[(self.ff.currency==ccy) & ~(self.ff.event.isin(filter))][['event', 'datetime', 'actual']]
         df_ccy['datetime'] = df_ccy['datetime'].apply(lambda x :x.replace(hour=0, minute=0, second=0))
-        df_ccy['actual'] = df_ccy['actual'].apply(parse_format)
 
         df_pivot= df_ccy.pivot(columns='event', values='actual')
         df_pivot.index=  df_ccy['datetime']
