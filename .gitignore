@@ -9,3 +9,6 @@ src/csv/hwqnghwgflanliuvfgqe/*
 *.ipynb
 test.py
 *.png
+finagg/*
+findata/*
+.env

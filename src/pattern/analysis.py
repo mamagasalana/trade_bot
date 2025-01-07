@@ -11,9 +11,8 @@ class ANALYSIS:
         self.scaler = StandardScaler()
         self.ccy = ccy
         self.reader = reader(ccy)
-        self.events = self.reader.query_ff_current()
-        self.excl1 = self.reader.event_metadata(ccy[:3])
-        self.excl2 = self.reader.event_metadata(ccy[3:])
+        self.datasource = "fred"
+        self.events = self.reader.get_events(self.datasource )
 
         self.ca = self.optimized_cusum_analysis()
 
@@ -44,12 +43,7 @@ class ANALYSIS:
             ret[k] = [pd.Series([int(changes)], index=[changes_idx])]
 
         
-        for event_original, excl in zip(self.events, [self.excl1, self.excl2]):
-
-            # these event only have data after Jan 2010 (could be after 2018)
-            
-            excl_events= excl[excl['min'] > datetime.datetime(2010,1,1)].index
-            event = event_original[~event_original.event.isin(excl_events)].copy()
+        for event in self.events:
             event['event2'] = event[['currency', 'eclass', 'event']].apply(tuple, axis=1)
             for k, v in ret.items():
                 dt1, dt2 = k
@@ -84,8 +78,8 @@ class ANALYSIS:
         return pd.concat(frames,axis=1)
 
     def plot_chart_in_the_same_cluster(self, ccy, thres=6, scaled=False):
-        df = self.reader.get_corr(ccy)
-        dp = self.reader.get_corr(ccy, format=1)
+        df = self.reader.get_corr(ccy, datasource=self.datasource )
+        dp = self.reader.get_corr(ccy, format=1, datasource=self.datasource )
         df2 = get_dendrogram(df, distance_threshold=thres)
         scaler = StandardScaler()
 
@@ -105,7 +99,7 @@ class ANALYSIS:
         
         changes_index= dendrogram.iloc[0]
         
-        dp = self.reader.get_corr(ccy2, format=0)
+        dp = self.reader.get_corr(ccy2, format=0, datasource=self.datasource )
 
         fx  = self.reader.fx.copy()
         fx['datetime'] = fx.index
@@ -121,8 +115,9 @@ class ANALYSIS:
         X_scaled.plot(kind='line')
 
 if __name__ == '__main__':
-    a = ANALYSIS('EURUSD')
-    a.optimized_cusum_analysis(threshold=0.03,mode =0, shift=-60)
+    a = ANALYSIS('CADJPY')
+    # a.optimized_cusum_analysis(threshold=0.03,mode =0, shift=-60)
+    a.plot_chart_in_the_same_cluster('CAD')
     # a.optimized_cusum_analysis(threshold=0.03,mode =1, shift=-60)
     # a.optimized_cusum_analysis(threshold=0.03,mode =-1, shift=-60)
     # a.optimized_cusum_analysis(threshold=0.03,mode =2, shift=-60)

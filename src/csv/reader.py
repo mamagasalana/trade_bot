@@ -11,15 +11,18 @@ import src.maps.economic_classification as econ_class
 from  src.maps.economic_classification import *
 from src.pattern.functions import parse_format
 import datetime
+from src.csv.fred import FRED
 
 class reader:
     def __init__(self, ccy=None):
         self.ccy = None #active currency
         self.ccys = {}
         self._fxs = {}
+        self.fred = FRED()
         self._chart_fxs = {}
         self.instrument_sentiment = {}
         self.INSTRUMENTS= json.load(open('src/maps/INSTRUMENT_MAP.json'))
+        self.datasources = ['fred', 'ff']
 
         if ccy is not None:
             self.load_currency(ccy)
@@ -42,11 +45,17 @@ class reader:
             self._chart_fxs[self.ccy] = {}
         return self._chart_fxs[self.ccy]
     
-    def query_ff_current(self):
+    def get_events(self, datasource='fred'):
         ccy1 =self.ccy[:3]
         ccy2 = self.ccy[3:]
-        return self.query_ff(ccy1), self.query_ff(ccy2)
-    
+        
+        assert datasource in self.datasources, f"datasource not found, expect datasource in {self.datasources}"
+        
+        if datasource == 'fred':
+            return self.fred.get(ccy1), self.fred.get(ccy2)
+        elif datasource == 'ff':
+            return self.query_ff(ccy1), self.query_ff(ccy2)
+            
     def query_ff(self, ccy, start_date=None, end_date=None):
         if start_date is None or end_date is None:
             ret1 = self.ff[(self.ff.currency==ccy)].copy()
@@ -54,14 +63,6 @@ class reader:
             ret1 = self.ff[(self.ff.currency==ccy) & (self.ff.datetime >= start_date) & (self.ff.datetime <= end_date)].copy()
         return ret1
     
-    def event_metadata(self, ccy):
-        ret = self.query_ff(ccy)
-        event_min = ret.groupby('event')['datetime'].min()
-        event_max = ret.groupby('event')['datetime'].max()
-        merged = pd.concat([event_min, event_max], axis=1)
-        merged.columns = ['min', 'max']
-        return merged
-            
     def load_currency(self, ccy):
         self.ccy = ccy # set active
         if not ccy in self.ccys:
@@ -98,8 +99,22 @@ class reader:
         module_contents = [x for x in dir(econ_class) if not x.startswith('__')]
         econ_classification = { y:x  for x in module_contents for y in eval(x)}
         df.loc[:, 'eclass']  =df.event.map(econ_classification)
+        
         self.ff = pd.merge(df, df_specs, on='eventid', how='inner')
         self.ff['actual'] = self.ff['actual'].apply(parse_format)
+
+        # to exclude sample without enough historicals
+        # these event only have data after Jan 2010 (could be after 2018)
+        self.ff['event2'] = self.ff[['event', 'currency']].apply(tuple, axis=1)
+        event_min = self.ff.groupby('event2')['datetime'].min()
+        event_max = self.ff.groupby('event2')['datetime'].max()
+        excl = pd.concat([event_min, event_max], axis=1)
+        excl.columns = ['min', 'max']
+        filter = excl[(excl['min'] > datetime.datetime(2010,1,1)) |
+                      (excl['max'] < datetime.datetime(2023,1,1)) 
+                      ].index
+        self.ff = self.ff[~self.ff.event2.isin(filter)].copy()
+        
 
     def load_etoro(self):
         
@@ -119,19 +134,22 @@ class reader:
                 info['date'] = dt
                 self.instrument_sentiment[instrument_id].append(info)
 
-    def get_corr(self, ccy, format=2):
+    def get_corr(self, ccy, format=2, datasource='ff'):
         """
         0 -  returns with date
         1 - drops date
         2 - return correlation
         """
-        excl = self.event_metadata(ccy)
-        filter = excl[excl['min'] > datetime.datetime(2010,1,1)].index
+        assert datasource in self.datasources, f"datasource not found, expect datasource in {self.datasources}"
 
         date_range_first_day = pd.date_range(start="2009-01-01", end="2023-12-31", freq="D")
         df_full = pd.DataFrame({"datetime": date_range_first_day})
 
-        df_ccy = self.ff[(self.ff.currency==ccy) & ~(self.ff.event.isin(filter))][['event', 'datetime', 'actual']]
+        if datasource == 'ff':
+            df_ccy = self.ff[(self.ff.currency==ccy)][['event', 'datetime', 'actual']]
+        elif datasource == 'fred':
+            df_ccy = self.fred.get(ccy)[['event', 'datetime', 'actual']]
+            
         df_ccy['datetime'] = df_ccy['datetime'].apply(lambda x :x.replace(hour=0, minute=0, second=0))
 
         df_pivot= df_ccy.pivot(columns='event', values='actual')
@@ -255,7 +273,7 @@ if __name__ == '__main__':
 
     from scipy.signal import find_peaks
     r = reader('EURUSD')
-    r.ff.to_csv('test2.csv')
+    b = r.get_corr('EUR')
     print('debug')
     # df = r.fx
     # arr, info = find_peaks(df.High, prominence=0.003)
