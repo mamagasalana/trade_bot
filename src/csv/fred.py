@@ -1,4 +1,4 @@
-from finagg.fred.api import CategorySeries, SeriesObservations,SeriesCategories
+from finagg.fred.api import CategorySeries, SeriesObservations,SeriesCategories,Tags
 import datetime
 import pandas as pd
 import os
@@ -27,7 +27,33 @@ class FRED:
     @property
     def filename(self):
         return f'files/fred/{self.ccy}.csv'
+    
+    def get_tag(self, tag, _list=False):
+        self.ccy = tag
+        df =Tags.series.get(tag_names="daily", paginate=True)  
 
+        df['last_updated'] = df.last_updated.apply(lambda x : datetime.datetime.strptime(x[:19],'%Y-%m-%d %H:%M:%S'))
+        df['o1'] = pd.to_datetime(df.observation_start)
+        df['o2'] = pd.to_datetime(df.observation_end)
+
+        condition1 = [
+                     f"(o1.dt.year < {self.start_year})",
+                      f"(o2.dt.year >= {self.end_year})"]
+        condition2 = [
+                       f"(o1.dt.year < {self.start_year})", 
+                       f"(o2.dt.year >= {self.end_year-1})"]
+        
+        condition_groups = [condition1, condition2]
+        conditions  = f" or ".join([f"({' and '.join(group)})" for group in condition_groups])
+
+        if _list:
+            return df.query(conditions)
+        else:
+            # web cache only last for 1 week , is it good to store locally to avoid spamming fred
+            if os.path.exists(self.filename):
+                return pd.read_csv(self.filename)
+            return self.get_event_by_ids(df.query(conditions).id.unique())
+    
     def get(self, ccy, _list=False):
         self.ccy = ccy
         category_id = FRED_MAP[self.ccy]
