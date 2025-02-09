@@ -1,0 +1,213 @@
+import pandas as pd
+import numpy as np
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.api import VAR
+import statsmodels.tsa.vector_ar.vecm as vecm
+
+from  src.csv.fred  import FRED
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import numpy as np
+
+
+class VECM:
+    def __init__(self):
+        self.fr = FRED()
+
+    
+    def get_data(self, raw=False):
+        df = self.fr.get_tag('daily')
+        if raw:
+            return df
+        
+        farb_idx = df[(df.eclass=='Factors Affecting Reserve Balances')].event.unique()
+        irs_idx = df[(df.eclass=='Interest Rate Spreads')].event.unique()
+        cp_idx = df[df.eclass=='Commercial Paper'].event.unique()
+
+
+        pivot_df = df.pivot(index='datetime', columns='event', values='actual').dropna(axis=1, thresh=10)#.ffill().dropna()
+        pivot_df[farb_idx] = pivot_df[farb_idx].fillna(0)
+        pivot_df[irs_idx] = pivot_df[irs_idx].ffill()
+        pivot_df[cp_idx] = pivot_df[cp_idx].ffill()
+        pivot_df = pivot_df.ffill().dropna()
+
+        return pivot_df
+
+
+    def get_pca_components(self, chart=False):
+        scaler = StandardScaler()
+        data = self.get_data()
+        X_scaled = scaler.fit_transform(data)
+
+        pca = PCA()
+        principalComponents = pca.fit_transform(X_scaled)
+
+        # To see the variance explained by each component
+        explained_variance = pca.explained_variance_ratio_
+        import matplotlib.pyplot as plt
+        explained_variance2 = explained_variance[:40]
+
+        if chart:
+            # Create a scree plot
+            plt.figure(figsize=(10, 5))
+            plt.plot(range(1, len(explained_variance2) + 1), explained_variance2, marker='o', linestyle='-')
+            plt.title('Scree Plot of PCA')
+            plt.xlabel('Principal Component')
+            plt.ylabel('Variance Explained')
+            plt.xticks(range(1, len(explained_variance2) + 1))  # Ensure x-axis labels match the number of components
+            plt.grid(True)
+            plt.show()
+
+        n_components = np.where(explained_variance>0.01)[0][-1]+1
+
+        cumsum = explained_variance[:n_components].sum()*100
+        print("this explained %.2f%% of variance" % cumsum)
+        pca = PCA(n_components=n_components)
+        principalComponents = pca.fit_transform(X_scaled)
+
+        return pd.DataFrame(data = principalComponents,
+                            columns = [f'principal_component_{i}' for i in range(n_components)],
+                            index=data.index
+                            )
+    
+
+    def unit_root_test(self, col, level=0, stats=False):
+        adf_result = adfuller(col, autolag='AIC')  # Automatically select the lag based on AIC
+
+        # Interpretation of results
+        if adf_result[1] < 0.05:
+            if stats:
+                # Output the results
+                print('ADF Statistic:', adf_result[0])
+                print('p-value:', adf_result[1])
+                print('Critical Values:')
+                for key, value in adf_result[4].items():
+                    print(f'\t{key}: {value}')
+            print(f"The series L({level}) is likely stationary (reject the null hypothesis of unit root).")
+        else:
+            self.unit_root_test(col.diff().dropna(), level=level+1, stats=stats)
+            # print("The series is likely non-stationary (fail to reject the null hypothesis of unit root).")
+
+    def select_order(self, data, raw=False):
+        model = VAR(data)
+        results = model.select_order(maxlags=15)  # You can adjust 'maxlags' as necessary
+        print(results.summary())
+
+        # why -1
+        # because VAR order shows lag
+        # but VECM require lag difference
+        # Each difference Δy_t = y_t - y_t-1 reduces the number of data points available for analysis by one for each lag level.
+        # This reduction occurs because the difference calculation combines information from two consecutive periods into one difference value.
+        # Here, Δy_t represents the change from one period to the next (y_t - y_t-1), capturing the period-to-period changes in the data.
+        if raw:
+            return results
+        else:
+            return results.bic - 1
+
+    def cointegration_test(self, data, det_order=1, k_ar_diff=2):
+        # Assuming 'data' is your DataFrame and 'maxlags' is defined
+        johansen_test = vecm.coint_johansen(data, det_order=0, k_ar_diff=2)
+
+        print("Johansen Cointegration Test Results:")
+        print("=====================================")
+        # print(f"Trace Statistics: {johansen_test.lr1}" )
+        # print(f"Critical Values (90%, 95%, 99%): {johansen_test.cvt}")
+        # print(f"Eigen Statistics: {johansen_test.lr2}", )
+        # print(f"Max-Eigen Critical Values (90%, 95%, 99%): {johansen_test.cvm}")
+        # print(f"Eigenvalues: {johansen_test.eig}", )
+        num_of_cointegrating =  0
+        # Interpretation
+        print("\nInterpretation:")
+        for i, (trace_stat, cv_95) in enumerate(zip(johansen_test.lr1, johansen_test.cvt[:, 1])):
+            print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
+
+            if trace_stat > cv_95:
+                
+                num_of_cointegrating = i+1
+                continue
+                # print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
+                # print(f"  => Reject null hypothesis of r <= {i}, suggesting at least {i+1} cointegrating relations at 95% confidence level.")
+
+            else:
+                print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
+                print(f"  => Fail to reject null hypothesis of r <= {i}, suggesting no more than {i} cointegrating relations at 95% confidence level.")
+                num_of_cointegrating = i
+                break
+        return num_of_cointegrating, johansen_test
+
+    def vecm_model(self, data, det_order=0, deterministic='ci', visualize=False):
+        k_ar_diff = self.select_order(data)
+        num_of_cointegration, _ = self.cointegration_test(data, det_order=det_order, k_ar_diff=k_ar_diff)
+        assert  num_of_cointegration, "No cointegration"
+
+        model = vecm.VECM(data, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
+        vecm_result = model.fit()
+        print(vecm_result.summary())
+        
+        if visualize:
+            for col in data.columns:
+                self.visualize_vecm(col, data, vecm_result)
+        return vecm_result
+    
+    
+        # # Calculating RMSE and MAE from the point where modeled data begins
+        # rmse = np.sqrt(mean_squared_error(data['Oil'], modeled_oil))
+        # mae = mean_absolute_error(data['Oil'], modeled_oil)
+
+        # print(f"RMSE: {rmse}")
+        # print(f"MAE: {mae}")
+
+    def visualize_vecm(self, key, data, vecm_result: vecm.VECMResults):
+        
+        #ECT - error correction term
+        idx = data.columns.tolist().index(key)
+        alpha = vecm_result.alpha[:, idx]  
+        ect_data = None
+
+        for idx in range(data.shape[-1]):
+            beta = vecm_result.beta[:, idx]
+            const = vecm_result.det_coef_coint[0][idx]
+            if ect_data is None:
+                ect_data = alpha[idx] * (data.dot(beta) + const)
+            else:
+                ect_data += alpha[idx] * (data.dot(beta) + const)
+
+
+        fitted_values = vecm_result.fittedvalues  # This retrieves the fitted values from the model
+        fitted_values = pd.DataFrame(fitted_values, columns=data.columns)
+
+        # Adding the initial actual values to the start of the fitted values to align the series
+        initial_values = data.head(vecm_result.k_ar)  # The number of initial points we can't fit
+        modeled_data = pd.concat([initial_values[key], fitted_values[key]], axis=0)
+        modeled_data.index = data.index
+
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+
+        # Plot actual and modeled oil prices on the primary y-axis
+        color = 'tab:blue'
+        ax1.set_xlabel('Date')
+        ax1.set_ylabel('Oil Prices', color=color)
+        ax1.plot(data.index, data[key], label=f'Actual {key} Prices', color='blue')
+        ax1.plot(data.index, modeled_data, label=f'Modeled {key} Prices', color='red', linestyle='--')
+        ax1.tick_params(axis='y', labelcolor=color)
+
+        # Create a second y-axis for the ECT
+        ax2 = ax1.twinx()
+        color = 'tab:green'
+        ax2.set_ylabel('ECT', color=color)  # we already handled the x-label with ax1
+        ax2.plot(data.index, ect_data, label=f'ECT for {key}', color='green', linestyle=':')
+        ax2.tick_params(axis='y', labelcolor=color)
+
+        # Adding a title and legend
+        fig.tight_layout()  # otherwise the right y-label is slightly clipped
+        plt.title(f'Actual vs. Modeled {key} Prices with ECT')
+        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+
+        plt.show()
+
+
+if __name__ == '__main__':
+    v =VECM()
+    v.get_pca_components()

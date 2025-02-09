@@ -152,9 +152,8 @@ class reader:
             
         df_ccy['datetime'] = df_ccy['datetime'].apply(lambda x :x.replace(hour=0, minute=0, second=0))
 
-        df_pivot= df_ccy.pivot(columns='event', values='actual')
-        df_pivot.index=  df_ccy['datetime']
-        df_pivot_no_na = df_pivot.groupby('datetime').mean().reset_index()
+        df_ccy = df_ccy.drop_duplicates(subset=['event', 'datetime'])
+        df_pivot_no_na = df_ccy.pivot(index='datetime',columns='event', values='actual').reset_index()
 
         ret = df_full.merge(df_pivot_no_na,how='left', on='datetime').fillna(method='ffill')
         ret=  ret[ret.datetime > datetime.datetime(2010,1,1)]
