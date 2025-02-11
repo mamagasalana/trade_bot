@@ -110,7 +110,7 @@ class VECM:
         # Assuming 'data' is your DataFrame and 'maxlags' is defined
         johansen_test = vecm.coint_johansen(data, det_order=0, k_ar_diff=2)
 
-        print("Johansen Cointegration Test Results:")
+        print("\nJohansen Cointegration Test Results:")
         print("=====================================")
         # print(f"Trace Statistics: {johansen_test.lr1}" )
         # print(f"Critical Values (90%, 95%, 99%): {johansen_test.cvt}")
@@ -121,7 +121,6 @@ class VECM:
         # Interpretation
         print("\nInterpretation:")
         for i, (trace_stat, cv_95) in enumerate(zip(johansen_test.lr1, johansen_test.cvt[:, 1])):
-            print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
 
             if trace_stat > cv_95:
                 
@@ -135,21 +134,33 @@ class VECM:
                 print(f"  => Fail to reject null hypothesis of r <= {i}, suggesting no more than {i} cointegrating relations at 95% confidence level.")
                 num_of_cointegrating = i
                 break
+        print("=====================================\n\n")
         return num_of_cointegrating, johansen_test
 
-    def vecm_model(self, data, det_order=0, deterministic='ci', visualize=False):
-        k_ar_diff = self.select_order(data)
-        num_of_cointegration, _ = self.cointegration_test(data, det_order=det_order, k_ar_diff=k_ar_diff)
+    def vecm_model(self, data, qry='', det_order=0, deterministic='ci', visualize=False):
+        
+        # model fitted with query data
+        if qry:
+            qrydata = data.query(qry)
+        else:
+            qrydata =  data.copy()
+
+        k_ar_diff = self.select_order(qrydata)
+        num_of_cointegration, _ = self.cointegration_test(qrydata, det_order=det_order, k_ar_diff=k_ar_diff)
+
+        print(f'k_ar_diff: {k_ar_diff}, num_of_cointegration: {num_of_cointegration}')
         assert  num_of_cointegration, "No cointegration"
 
-        model = vecm.VECM(data, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
+        model = vecm.VECM(qrydata, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
         vecm_result = model.fit()
         print(vecm_result.summary())
         
+        visualize_output = []
         if visualize:
             for col in data.columns:
-                self.visualize_vecm(col, data, vecm_result)
-        return vecm_result
+                visualize_output.append(self.visualize_vecm(col, data, vecm_result))
+
+        return vecm_result, visualize_output
     
     
         # # Calculating RMSE and MAE from the point where modeled data begins
@@ -162,18 +173,10 @@ class VECM:
     def visualize_vecm(self, key, data, vecm_result: vecm.VECMResults):
         
         #ECT - error correction term
-        idx = data.columns.tolist().index(key)
-        alpha = vecm_result.alpha[:, idx]  
-        ect_data = None
-
-        for idx in range(data.shape[-1]):
-            beta = vecm_result.beta[:, idx]
-            const = vecm_result.det_coef_coint[0][idx]
-            if ect_data is None:
-                ect_data = alpha[idx] * (data.dot(beta) + const)
-            else:
-                ect_data += alpha[idx] * (data.dot(beta) + const)
-
+        spread = data.dot(vecm_result.beta) + vecm_result.det_coef_coint
+        scaler = StandardScaler()
+        spread_scaled = scaler.fit_transform(spread.to_numpy())
+        # ect_data_scaled = ect_data
 
         fitted_values = vecm_result.fittedvalues  # This retrieves the fitted values from the model
         fitted_values = pd.DataFrame(fitted_values, columns=data.columns)
@@ -188,7 +191,7 @@ class VECM:
         # Plot actual and modeled oil prices on the primary y-axis
         color = 'tab:blue'
         ax1.set_xlabel('Date')
-        ax1.set_ylabel('Oil Prices', color=color)
+        ax1.set_ylabel(f'{key} Prices', color=color)
         ax1.plot(data.index, data[key], label=f'Actual {key} Prices', color='blue')
         ax1.plot(data.index, modeled_data, label=f'Modeled {key} Prices', color='red', linestyle='--')
         ax1.tick_params(axis='y', labelcolor=color)
@@ -197,8 +200,12 @@ class VECM:
         ax2 = ax1.twinx()
         color = 'tab:green'
         ax2.set_ylabel('ECT', color=color)  # we already handled the x-label with ax1
-        ax2.plot(data.index, ect_data, label=f'ECT for {key}', color='green', linestyle=':')
+        ax2.plot(data.index, spread_scaled, label=f'ECT for {key}', color='green', linestyle=':')
         ax2.tick_params(axis='y', labelcolor=color)
+        ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+        ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+        ax2.axhline(2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+
 
         # Adding a title and legend
         fig.tight_layout()  # otherwise the right y-label is slightly clipped
@@ -206,7 +213,7 @@ class VECM:
         fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
 
         plt.show()
-
+        return spread
 
 if __name__ == '__main__':
     v =VECM()
