@@ -177,6 +177,9 @@ class VECM:
         scaler = StandardScaler()
         spread_scaled = scaler.fit_transform(spread.to_numpy())
         # ect_data_scaled = ect_data
+        if spread.shape[-1] == 2:
+            spread_scaled = (spread_scaled[:, 0 ] - spread_scaled[:, 1]).reshape(-1, 1)
+            spread_scaled =  scaler.fit_transform(spread_scaled)
 
         fitted_values = vecm_result.fittedvalues  # This retrieves the fitted values from the model
         fitted_values = pd.DataFrame(fitted_values, columns=data.columns)
@@ -199,8 +202,8 @@ class VECM:
         # Create a second y-axis for the ECT
         ax2 = ax1.twinx()
         color = 'tab:green'
-        ax2.set_ylabel('ECT', color=color)  # we already handled the x-label with ax1
-        ax2.plot(data.index, spread_scaled, label=f'ECT for {key}', color='green', linestyle=':')
+        ax2.set_ylabel('spread', color=color)  # we already handled the x-label with ax1
+        ax2.plot(data.index, spread_scaled, label=[f'spread {x}' for x in data.columns], color='green', linestyle=':')
         ax2.tick_params(axis='y', labelcolor=color)
         ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
         ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
