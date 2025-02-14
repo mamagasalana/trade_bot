@@ -5,6 +5,7 @@ from statsmodels.tsa.api import VAR
 import statsmodels.tsa.vector_ar.vecm as vecm
 
 from  src.csv.fred  import FRED
+from src.csv.reader import reader
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
@@ -15,8 +16,18 @@ import numpy as np
 class VECM:
     def __init__(self):
         self.fr = FRED()
+        self.debug=True
+        self.reader = reader()
 
-    
+    def get_pairs(self, pairs: list):
+        assert len(pairs) ==2, "Pairs must be in 2"
+        self.reader.load_currency(pairs[0]); fx1 = self.reader.resample('D')[['Close']]
+        self.reader.load_currency(pairs[1]); fx2 = self.reader.resample('D')[['Close']]
+
+        data = fx1.merge(fx2, left_index=True, right_index=True, how='inner')
+        data.columns = pairs
+        return data
+
     def get_data(self, raw=False):
         df = self.fr.get_tag('daily')
         if raw:
@@ -93,7 +104,7 @@ class VECM:
     def select_order(self, data, raw=False):
         model = VAR(data)
         results = model.select_order(maxlags=15)  # You can adjust 'maxlags' as necessary
-        print(results.summary())
+        self.custom_print(results.summary())
 
         # why -1
         # because VAR order shows lag
@@ -106,54 +117,57 @@ class VECM:
         else:
             return results.bic - 1
 
+    def custom_print(self, val):
+        if self.debug:
+            print(val)
+
     def cointegration_test(self, data, det_order=1, k_ar_diff=2):
         # Assuming 'data' is your DataFrame and 'maxlags' is defined
         johansen_test = vecm.coint_johansen(data, det_order=0, k_ar_diff=2)
 
-        print("\nJohansen Cointegration Test Results:")
-        print("=====================================")
-        # print(f"Trace Statistics: {johansen_test.lr1}" )
-        # print(f"Critical Values (90%, 95%, 99%): {johansen_test.cvt}")
-        # print(f"Eigen Statistics: {johansen_test.lr2}", )
-        # print(f"Max-Eigen Critical Values (90%, 95%, 99%): {johansen_test.cvm}")
-        # print(f"Eigenvalues: {johansen_test.eig}", )
+        self.custom_print("\nJohansen Cointegration Test Results:")
+        self.custom_print("=====================================")
+        # self.custom_print(f"Trace Statistics: {johansen_test.lr1}" )
+        # self.custom_print(f"Critical Values (90%, 95%, 99%): {johansen_test.cvt}")
+        # self.custom_print(f"Eigen Statistics: {johansen_test.lr2}", )
+        # self.custom_print(f"Max-Eigen Critical Values (90%, 95%, 99%): {johansen_test.cvm}")
+        # self.custom_print(f"Eigenvalues: {johansen_test.eig}", )
         num_of_cointegrating =  0
         # Interpretation
-        print("\nInterpretation:")
+        self.custom_print("\nInterpretation:")
         for i, (trace_stat, cv_95) in enumerate(zip(johansen_test.lr1, johansen_test.cvt[:, 1])):
 
             if trace_stat > cv_95:
                 
                 num_of_cointegrating = i+1
                 continue
-                # print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
-                # print(f"  => Reject null hypothesis of r <= {i}, suggesting at least {i+1} cointegrating relations at 95% confidence level.")
+                # self.custom_print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
+                # self.custom_print(f"  => Reject null hypothesis of r <= {i}, suggesting at least {i+1} cointegrating relations at 95% confidence level.")
 
             else:
-                print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
-                print(f"  => Fail to reject null hypothesis of r <= {i}, suggesting no more than {i} cointegrating relations at 95% confidence level.")
+                self.custom_print(f"r <= {i}: Trace Statistic = {trace_stat:.4f}, 95% Critical Value = {cv_95:.4f}")
+                self.custom_print(f"  => Fail to reject null hypothesis of r <= {i}, suggesting no more than {i} cointegrating relations at 95% confidence level.")
                 num_of_cointegrating = i
                 break
-        print("=====================================\n\n")
+        self.custom_print("=====================================\n\n")
         return num_of_cointegrating, johansen_test
 
-    def vecm_model(self, data, qry='', det_order=0, deterministic='ci', visualize=False):
+    def vecm_model(self, data, det_order=0, deterministic='ci', visualize=False):
+
+        if data.shape[0] < 1000:
+            return None
         
-        # model fitted with query data
-        if qry:
-            qrydata = data.query(qry)
-        else:
-            qrydata =  data.copy()
+        k_ar_diff = self.select_order(data)
+        num_of_cointegration, _ = self.cointegration_test(data, det_order=det_order, k_ar_diff=k_ar_diff)
 
-        k_ar_diff = self.select_order(qrydata)
-        num_of_cointegration, _ = self.cointegration_test(qrydata, det_order=det_order, k_ar_diff=k_ar_diff)
+        self.custom_print(f'k_ar_diff: {k_ar_diff}, num_of_cointegration: {num_of_cointegration}')
+        # assert  num_of_cointegration, "No cointegration"
+        if not num_of_cointegration:
+            return None
 
-        print(f'k_ar_diff: {k_ar_diff}, num_of_cointegration: {num_of_cointegration}')
-        assert  num_of_cointegration, "No cointegration"
-
-        model = vecm.VECM(qrydata, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
+        model = vecm.VECM(data, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
         vecm_result = model.fit()
-        print(vecm_result.summary())
+        self.custom_print(vecm_result.summary())
         
         visualize_output = []
         if visualize:
@@ -189,21 +203,23 @@ class VECM:
         modeled_data = pd.concat([initial_values[key], fitted_values[key]], axis=0)
         modeled_data.index = data.index
 
-        fig, ax1 = plt.subplots(figsize=(12, 6))
+        fig, ax1 = plt.subplots(figsize=(12, 4))
 
         # Plot actual and modeled oil prices on the primary y-axis
         color = 'tab:blue'
         ax1.set_xlabel('Date')
         ax1.set_ylabel(f'{key} Prices', color=color)
-        ax1.plot(data.index, data[key], label=f'Actual {key} Prices', color='blue')
-        ax1.plot(data.index, modeled_data, label=f'Modeled {key} Prices', color='red', linestyle='--')
+        # ax1.plot(data.index, data[key], label=f'Actual {key} Prices', color='blue')
+        # ax1.plot(data.index, modeled_data, label=f'Modeled {key} Prices', color='red', linestyle='--')
+        ax1.plot(data.index, data[key], color='blue')
         ax1.tick_params(axis='y', labelcolor=color)
 
         # Create a second y-axis for the ECT
         ax2 = ax1.twinx()
         color = 'tab:green'
         ax2.set_ylabel('spread', color=color)  # we already handled the x-label with ax1
-        ax2.plot(data.index, spread_scaled, label=[f'spread {x}' for x in data.columns], color='green', linestyle=':')
+        # ax2.plot(data.index, spread_scaled, label=[f'spread {x}' for x in data.columns], color='green', linestyle=':')
+        ax2.plot(data.index, spread_scaled, color='green', linestyle=':')
         ax2.tick_params(axis='y', labelcolor=color)
         ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
         ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
