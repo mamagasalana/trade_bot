@@ -11,22 +11,128 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import numpy as np
+import os
+from functools import partial
+from pandarallel import pandarallel
+from src.csv.slicer import Slicer
+
+pandarallel.initialize(progress_bar=True)
 
 
 class VECM:
     def __init__(self):
         self.fr = FRED()
+        self.usd_ccy_list = self.fr.get_ccy()
         self.debug=True
-        self.reader = reader()
+        #365 - 52*2 = 261 days (after excluded weekend)
+        
+
+        # self.reader = reader()
+
+    def compute_historical_vecm(self, pairs: list, mode: str, deterministic= "ci"):
+        self.debug=False
+        filename = f'files/cointegration/{"_".join(sorted(pairs))}_{mode}_{deterministic}.pkl'
+        if os.path.exists(filename):
+            data2= pd.read_pickle(filename)
+        else:
+            data = self.get_pairs(pairs)
+            data2= data.reset_index(drop=True)
+            modes = ['fix_start', 'fix_end', 'rolling10', 'rolling15', 'rolling5']
+
+            assert mode in modes, f'mode must be one of {modes}'
+            slicer = Slicer(data2, mode)
+
+            results = data2.index.to_series().parallel_apply(lambda i: 
+                self.vecm_model(slicer.get(i), deterministic=deterministic))
+                
+            data2['vecm'] = results
+            data2.index = data.index
+            data2.to_pickle(filename)
+        
+        return data2
+    
+    def plot_spread(self, data, key):
+        fig, ax1 = plt.subplots(figsize=(12, 4))
+
+        # Plot actual and modeled oil prices on the primary y-axis
+        color = 'tab:blue'
+        ax1.set_xlabel('Date')
+        ax1.set_ylabel(f'{key}', color=color)
+        data.plot(y=key, color='blue', ax=ax1, legend=False)
+        ax1.tick_params(axis='y', labelcolor=color)
+
+        # Create a second y-axis for the ECT
+        ax2 = ax1.twinx()
+        color = 'tab:green'
+        ax2.set_ylabel('spread', color=color)  # we already handled the x-label with ax1
+        data.plot(y='spread', color='green', ax=ax2, legend=False, linestyle=':')
+        ax2.tick_params(axis='y', labelcolor=color)
+        ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+        ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+        ax2.axhline(2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+
+        # Adding a title and legend
+        # fig.tight_layout()  # otherwise the right y-label is slightly clipped
+        plt.title(f'Actual vs. Spread')
+        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+        plt.show()
+
+    def plot_historical_vecm(self, pairs: list, mode: str, deterministic= "ci", raw=False):
+        data = self.compute_historical_vecm(pairs, mode, deterministic)
+        data2 = data.reset_index(drop=True)
+        slicer = Slicer(data2[pairs], mode)
+        spread = data2.index.to_series().apply(lambda i: 
+                    self.get_scaled_spread(slicer.get(i), data2.iloc[i]['vecm'] ))
+        spread.index= data.index
+        data['spread'] = spread
+
+        if raw:
+            return data
+        
+        for key in pairs:
+            self.plot_spread(data, key)
+
+    def get_currency_to_usd(self, currency):
+        """
+        Returns a Series representing the USD value of one unit of `currency`.
+        If the pair is quoted as 'CURUSD', it's direct.
+        If it's quoted as 'USDCUR', we return the reciprocal.
+        """
+        # If the currency is already USD, then 1 USD = 1.
+        if currency == 'USD':
+            return 1
+        # Check for direct pair like 'AUDUSD'
+        direct = currency + 'USD'
+        if direct in self.usd_ccy_list.columns:
+            return self.usd_ccy_list[direct]
+        # Otherwise, check for inverse pair like 'USDAUD'
+        inverse = 'USD' + currency
+        if inverse in self.usd_ccy_list.columns:
+            return 1 / self.usd_ccy_list[inverse]
+        # If neither is available, raise an error
+        raise KeyError(f"Conversion for currency {currency} not found in DataFrame columns.")
 
     def get_pairs(self, pairs: list):
-        assert len(pairs) ==2, "Pairs must be in 2"
-        self.reader.load_currency(pairs[0]); fx1 = self.reader.resample('D')[['Close']]
-        self.reader.load_currency(pairs[1]); fx2 = self.reader.resample('D')[['Close']]
+        """
+        get pairs from fred, manually generate exotic pairs 
+        """
+        for pair in pairs:
+            # If the pair is already present, skip it.
+            if pair in self.usd_ccy_list.columns:
+                continue
 
-        data = fx1.merge(fx2, left_index=True, right_index=True, how='inner')
-        data.columns = pairs
-        return data
+            # Extract base and quote currencies (first 3 letters are base, last 3 are quote)
+            base, quote = pair[:3], pair[3:]
+            
+            # Get USD conversion for base and quote
+            base_to_usd = self.get_currency_to_usd(base)
+            quote_to_usd = self.get_currency_to_usd(quote)
+            exotic_rate = base_to_usd / quote_to_usd
+
+            # Add the new exotic pair column to your DataFrame
+            self.usd_ccy_list[pair] = exotic_rate
+            print(f"Generated exotic pair {pair}.")
+        return self.usd_ccy_list[pairs].dropna()
 
     def get_data(self, raw=False):
         df = self.fr.get_tag('daily')
@@ -169,13 +275,14 @@ class VECM:
         vecm_result = model.fit()
         self.custom_print(vecm_result.summary())
         
-        visualize_output = []
         if visualize:
-            for col in data.columns:
-                visualize_output.append(self.visualize_vecm(col, data, vecm_result))
+            pairs = data.columns
+            spread_scaled = self.get_scaled_spread(data.to_numpy(), vecm_result, raw=True)
+            data['spread'] = spread_scaled
+            for col in pairs:
+                self.plot_spread(data, col)
 
-        return vecm_result, visualize_output
-    
+        return vecm_result
     
         # # Calculating RMSE and MAE from the point where modeled data begins
         # rmse = np.sqrt(mean_squared_error(data['Oil'], modeled_oil))
@@ -184,55 +291,23 @@ class VECM:
         # print(f"RMSE: {rmse}")
         # print(f"MAE: {mae}")
 
-    def visualize_vecm(self, key, data, vecm_result: vecm.VECMResults):
-        
+    def get_scaled_spread(self, data, vecm_result: vecm.VECMResults, raw=False):
         #ECT - error correction term
+        if vecm_result is None:
+            return
         spread = data.dot(vecm_result.beta) + vecm_result.det_coef_coint
         scaler = StandardScaler()
-        spread_scaled = scaler.fit_transform(spread.to_numpy())
+        spread_scaled = scaler.fit_transform(spread)
         # ect_data_scaled = ect_data
         if spread.shape[-1] == 2:
             spread_scaled = (spread_scaled[:, 0 ] - spread_scaled[:, 1]).reshape(-1, 1)
             spread_scaled =  scaler.fit_transform(spread_scaled)
-
-        fitted_values = vecm_result.fittedvalues  # This retrieves the fitted values from the model
-        fitted_values = pd.DataFrame(fitted_values, columns=data.columns)
-
-        # Adding the initial actual values to the start of the fitted values to align the series
-        initial_values = data.head(vecm_result.k_ar)  # The number of initial points we can't fit
-        modeled_data = pd.concat([initial_values[key], fitted_values[key]], axis=0)
-        modeled_data.index = data.index
-
-        fig, ax1 = plt.subplots(figsize=(12, 4))
-
-        # Plot actual and modeled oil prices on the primary y-axis
-        color = 'tab:blue'
-        ax1.set_xlabel('Date')
-        ax1.set_ylabel(f'{key} Prices', color=color)
-        # ax1.plot(data.index, data[key], label=f'Actual {key} Prices', color='blue')
-        # ax1.plot(data.index, modeled_data, label=f'Modeled {key} Prices', color='red', linestyle='--')
-        ax1.plot(data.index, data[key], color='blue')
-        ax1.tick_params(axis='y', labelcolor=color)
-
-        # Create a second y-axis for the ECT
-        ax2 = ax1.twinx()
-        color = 'tab:green'
-        ax2.set_ylabel('spread', color=color)  # we already handled the x-label with ax1
-        # ax2.plot(data.index, spread_scaled, label=[f'spread {x}' for x in data.columns], color='green', linestyle=':')
-        ax2.plot(data.index, spread_scaled, color='green', linestyle=':')
-        ax2.tick_params(axis='y', labelcolor=color)
-        ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
-        ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
-        ax2.axhline(2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
-
-
-        # Adding a title and legend
-        fig.tight_layout()  # otherwise the right y-label is slightly clipped
-        plt.title(f'Actual vs. Modeled {key} Prices with ECT')
-        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
-
-        plt.show()
-        return spread
+        
+        if raw:
+            return spread_scaled
+        else:
+            return spread_scaled.reshape(-1)[-1]
+        
 
 if __name__ == '__main__':
     v =VECM()

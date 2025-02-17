@@ -19,6 +19,16 @@ FRED_MAP = {
 
  }
 
+CCY_MAP = { 
+    'DEXCAUS' : 'USDCAD',
+    'DEXSZUS' : 'USDCHF',
+    'DEXUSEU' : 'EURUSD',
+    'DEXUSAL' : 'AUDUSD',
+    'DEXUSNZ' : 'NZDUSD', 
+    'DEXJPUS' : 'USDJPY',
+    'DEXUSUK' : 'GBPUSD',
+}
+
 class FRED:
     def __init__(self, end_year=2024):
         self.start_year = 2009
@@ -28,6 +38,16 @@ class FRED:
     def filename(self):
         return f'files/fred/{self.ccy}.csv'
     
+    def get_ccy(self):
+        self.ccy = 'ccy'
+        self.start_year = 1970
+        # web cache only last for 1 week , is it good to store locally to avoid spamming fred
+        if os.path.exists(self.filename):
+            df= pd.read_csv(self.filename).pivot(index='datetime', columns='event', values='actual' )
+            return df.rename(columns=CCY_MAP)
+        df= self.get_event_by_ids(CCY_MAP.keys())
+        return df.pivot(index='datetime', columns='event', values='actual' ).rename(columns=CCY_MAP)    
+
     def get_tag(self, tag, _list=False):
         self.ccy = tag
         df =Tags.series.get(tag_names="daily", paginate=True)  
@@ -103,4 +123,4 @@ class FRED:
 
 if __name__ =='__main__':
     a = FRED()
-    a.get('AUD')
+    a.get_ccy()
