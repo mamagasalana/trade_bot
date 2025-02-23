@@ -30,13 +30,22 @@ class VECM:
 
         # self.reader = reader()
 
-    def compute_historical_vecm(self, pairs: list, mode: str, deterministic= "ci"):
+    def compute_historical_vecm(self, pairs: list, 
+                                mode: str, 
+                                qry: str=None, 
+                                deterministic= "ci"):
         self.debug=False
-        filename = f'files/cointegration/{"_".join(sorted(pairs))}_{mode}_{deterministic}.pkl'
+        if qry is None:
+            filename = f'files/cointegration/{"_".join(sorted(pairs))}_{mode}_{deterministic}.pkl'
+        else:
+            filename = f'files/cointegration/{"_".join(sorted(pairs))}_{mode}_{deterministic}_{qry}.pkl'
+
         if os.path.exists(filename):
             data2= pd.read_pickle(filename)
         else:
             data = self.get_pairs(pairs)
+            if qry is not None:
+                data = data.query(qry)
             data2= data.reset_index(drop=True)
             modes = ['fix_start', 'fix_end', 'rolling10', 'rolling15', 'rolling5']
 
@@ -78,8 +87,13 @@ class VECM:
         fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
         plt.show()
 
-    def plot_historical_vecm(self, pairs: list, mode: str, mode2: str=None, deterministic= "ci", raw=False):
-        data = self.compute_historical_vecm(pairs, mode, deterministic)
+    def plot_historical_vecm(self, pairs: list, 
+                             mode: str, 
+                             mode2: str=None, 
+                             qry : str=None,
+                             deterministic= "ci", 
+                             raw=False):
+        data = self.compute_historical_vecm(pairs=pairs, mode=mode, qry=qry, deterministic=deterministic)
         data2 = data.reset_index(drop=True)
         if mode2 is None:
             mode2 = mode
@@ -88,12 +102,20 @@ class VECM:
                     self.get_scaled_spread(slicer.get(i), data2.iloc[i]['vecm'] ))
         spread.index= data.index
         data['spread'] = spread
-
+        projected =  data2.index.to_series().apply(lambda i: 
+                    self.get_projected(slicer.get(i), data2.iloc[i]['vecm'] ))
+        projected.index = data.index
+        has_projected = not projected[~projected.isna()].empty
+        if has_projected:
+            data[['projected_%s' % x for x in pairs]] = projected.apply(pd.Series)
         if raw:
             return data
         
         for key in pairs:
-            self.plot_spread(data, key)
+            if has_projected:
+                self.plot_spread(data, [key, 'projected_%s' % key])
+            else:
+                self.plot_spread(data, key)
 
     def get_currency_to_usd(self, currency):
         """
@@ -286,7 +308,7 @@ class VECM:
         if visualize:
             pairs = data.columns
             spread_scaled = self.get_scaled_spread(data.to_numpy(), vecm_result, raw=True)
-            projected = self.get_projected(data.to_numpy(), vecm_result)
+            projected = self.get_projected(data.to_numpy(), vecm_result, raw=True)
             data2 = data.copy()
             data2['spread'] = spread_scaled
             data2[['projected_%s' % x for x in pairs]] = projected
@@ -327,13 +349,17 @@ class VECM:
 
             ret = -(sum_aby + sum_ac )/ D
             out.append(ret)
-        return np.column_stack(out)
+        project = np.column_stack(out)
+        if raw:
+            return project
+        else:
+            return project[-1]
 
     def get_scaled_spread(self, data, vecm_result: vecm.VECMResults, raw=False):
 
         if vecm_result is None:
             return
-        projected = self.get_projected(data, vecm_result)
+        projected = self.get_projected(data, vecm_result, raw=True)
         spread =  data[:, 0] - projected[:, 0]
         scaler = StandardScaler()
         spread_scaled = scaler.fit_transform(spread.reshape(-1, 1))
