@@ -8,3 +8,6 @@ scipy
 seaborn
 scikit-learn
 statsmodels
+pyarrow
+fastparquet
+parallel-pandas

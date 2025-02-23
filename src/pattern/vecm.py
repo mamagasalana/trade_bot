@@ -3,7 +3,7 @@ import numpy as np
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.api import VAR
 import statsmodels.tsa.vector_ar.vecm as vecm
-
+import itertools
 from  src.csv.fred  import FRED
 from src.csv.reader import reader
 from sklearn.decomposition import PCA
@@ -15,9 +15,10 @@ import os
 from functools import partial
 from pandarallel import pandarallel
 from src.csv.slicer import Slicer
+from tqdm import tqdm
+import multiprocessing as mp
 
 pandarallel.initialize(progress_bar=True)
-
 
 class VECM:
     def __init__(self):
@@ -58,7 +59,7 @@ class VECM:
         color = 'tab:blue'
         ax1.set_xlabel('Date')
         ax1.set_ylabel(f'{key}', color=color)
-        data.plot(y=key, color='blue', ax=ax1, legend=False)
+        data.plot(y=key, color=['blue', 'orange'], ax=ax1, legend=False)
         ax1.tick_params(axis='y', labelcolor=color)
 
         # Create a second y-axis for the ECT
@@ -77,10 +78,12 @@ class VECM:
         fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
         plt.show()
 
-    def plot_historical_vecm(self, pairs: list, mode: str, deterministic= "ci", raw=False):
+    def plot_historical_vecm(self, pairs: list, mode: str, mode2: str=None, deterministic= "ci", raw=False):
         data = self.compute_historical_vecm(pairs, mode, deterministic)
         data2 = data.reset_index(drop=True)
-        slicer = Slicer(data2[pairs], mode)
+        if mode2 is None:
+            mode2 = mode
+        slicer = Slicer(data2[pairs], mode2)
         spread = data2.index.to_series().apply(lambda i: 
                     self.get_scaled_spread(slicer.get(i), data2.iloc[i]['vecm'] ))
         spread.index= data.index
@@ -153,9 +156,14 @@ class VECM:
         return pivot_df
 
 
-    def get_pca_components(self, chart=False):
+    def get_pca_components(self, chart=False, min_variance=0.05):
         scaler = StandardScaler()
-        data = self.get_data()
+        fname =f'files/pca/pca_raw.parquet'
+        assert os.path.exists(fname), "src/csv/Please run pca_raw.py"
+        data=  pd.read_parquet(fname)
+        print(f"Data shape before {data.shape}" )
+        data =data.replace([np.inf, -np.inf], np.nan).dropna(axis=1)
+        print(f"Data shape after {data.shape}" )
         X_scaled = scaler.fit_transform(data)
 
         pca = PCA()
@@ -177,7 +185,7 @@ class VECM:
             plt.grid(True)
             plt.show()
 
-        n_components = np.where(explained_variance>0.01)[0][-1]+1
+        n_components = np.where(explained_variance>min_variance)[0][-1]+1
 
         cumsum = explained_variance[:n_components].sum()*100
         print("this explained %.2f%% of variance" % cumsum)
@@ -278,9 +286,13 @@ class VECM:
         if visualize:
             pairs = data.columns
             spread_scaled = self.get_scaled_spread(data.to_numpy(), vecm_result, raw=True)
-            data['spread'] = spread_scaled
-            for col in pairs:
-                self.plot_spread(data, col)
+            projected = self.get_projected(data.to_numpy(), vecm_result)
+            data2 = data.copy()
+            data2['spread'] = spread_scaled
+            data2[['projected_%s' % x for x in pairs]] = projected
+            if spread_scaled is not None:
+                for col in pairs:
+                    self.plot_spread(data2, [col, 'projected_%s' % col])
 
         return vecm_result
     
@@ -291,17 +303,41 @@ class VECM:
         # print(f"RMSE: {rmse}")
         # print(f"MAE: {mae}")
 
-    def get_scaled_spread(self, data, vecm_result: vecm.VECMResults, raw=False):
-        #ECT - error correction term
+    def get_projected(self, data, vecm_result: vecm.VECMResults, raw=False):
+        # general equation to express x in terms of y
+        # xₜ = - ( (∑₍ᵢ₌₁₎ʳ aᵢ · (Bᵢ ⋅ yₜ)) + (∑₍ᵢ₌₁₎ʳ aᵢ · cᵢ) ) / (∑₍ᵢ₌₁₎ʳ aᵢ · bᵢ)
         if vecm_result is None:
             return
-        spread = data.dot(vecm_result.beta) + vecm_result.det_coef_coint
+
+        out = []
+        for j in range(data.shape[-1]):
+            beta = vecm_result.beta            # shape: (n, r)
+            c_vec = vecm_result.det_coef_coint # shape: (r,)
+            a_j = vecm_result.alpha[j, :]      # adjustment coefficients for equation j, shape: (r,)
+
+            # Denom: D = ∑_{i=1}^{r} a[j,i] * beta[j, i]
+            sum_ac = np.dot(a_j, c_vec.T)  #to achieve (∑₍ᵢ₌₁₎ʳ aᵢ · cᵢ) )
+            D = np.dot(a_j, beta[j, :])
+            sum_aby =np.zeros(data.shape[0])
+            n = beta.shape[0]
+            for k in range(n):
+                if k != j:
+                    sum_aby += data[:, k] *np.dot(a_j, beta[k, :])
+
+
+            ret = -(sum_aby + sum_ac )/ D
+            out.append(ret)
+        return np.column_stack(out)
+
+    def get_scaled_spread(self, data, vecm_result: vecm.VECMResults, raw=False):
+
+        if vecm_result is None:
+            return
+        projected = self.get_projected(data, vecm_result)
+        spread =  data[:, 0] - projected[:, 0]
         scaler = StandardScaler()
-        spread_scaled = scaler.fit_transform(spread)
+        spread_scaled = scaler.fit_transform(spread.reshape(-1, 1))
         # ect_data_scaled = ect_data
-        if spread.shape[-1] == 2:
-            spread_scaled = (spread_scaled[:, 0 ] - spread_scaled[:, 1]).reshape(-1, 1)
-            spread_scaled =  scaler.fit_transform(spread_scaled)
         
         if raw:
             return spread_scaled
