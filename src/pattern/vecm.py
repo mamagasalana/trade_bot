@@ -3,11 +3,11 @@ import numpy as np
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.api import VAR
 import statsmodels.tsa.vector_ar.vecm as vecm
+from sklearn.preprocessing import StandardScaler
 import itertools
+from src.pattern.pca import custom_PCA
 from  src.csv.fred  import FRED
 from src.csv.reader import reader
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import numpy as np
@@ -26,10 +26,47 @@ class VECM:
         self.usd_ccy_list = self.fr.get_ccy()
         self.debug=True
         #365 - 52*2 = 261 days (after excluded weekend)
-        
+        self.custom_pca = custom_PCA()
 
         # self.reader = reader()
 
+    def compute_historical_vecm_pca(self, pairs: list, 
+                                mode: str, 
+                                qry: str=None, 
+                                deterministic= "ci",
+                                version:int=1):
+        self.debug=False
+        pca_version = self.custom_pca.get_version(version=version,base=True)
+        if qry is None:
+            filename = f'files/cointegration/{pca_version}_{"_".join(sorted(pairs))}_{mode}_{deterministic}.pkl'
+        else:
+            filename = f'files/cointegration/{pca_version}_{"_".join(sorted(pairs))}_{mode}_{deterministic}_{qry}.pkl'
+
+        if os.path.exists(filename):
+            data2= pd.read_pickle(filename)
+        else:
+            data = self.get_pairs(pairs)
+            if qry is not None:
+                data = data.query(qry)
+
+            data_pca = pd.read_csv(self.custom_pca.get_version(version=version))
+            data = data.merge(data_pca, how='inner', left_index=True, right_on='datetime')
+            data = data.set_index('datetime') 
+            data2= data.reset_index(drop=True)
+            modes = ['fix_start', 'fix_end', 'rolling10', 'rolling15', 'rolling5']
+
+            assert mode in modes, f'mode must be one of {modes}'
+            slicer = Slicer(data2, mode)
+
+            results = data2.index.to_series().parallel_apply(lambda i: 
+                self.vecm_model(slicer.get(i), deterministic=deterministic))
+                
+            data2['vecm'] = results
+            data2.index = data.index
+            data2.to_pickle(filename)
+        
+        return data2
+    
     def compute_historical_vecm(self, pairs: list, 
                                 mode: str, 
                                 qry: str=None, 
@@ -117,6 +154,44 @@ class VECM:
             else:
                 self.plot_spread(data, key)
 
+    def plot_historical_vecm_pca(self, pairs: list, 
+                             mode: str, 
+                             mode2: str=None, 
+                             qry : str=None,
+                             deterministic= "ci", 
+                             raw=False,
+                             version=1):
+        data = self.compute_historical_vecm_pca(pairs=pairs, mode=mode, qry=qry, deterministic=deterministic, version=version)
+        data2 = data.reset_index(drop=True)
+        if mode2 is None:
+            mode2 = mode
+        
+        keys = [x for x in data.columns if x!='vecm']
+        slicer = Slicer(data2[keys], mode2)
+        spread = data2.index.to_series().apply(lambda i: 
+                    self.get_scaled_spread(slicer.get(i), data2.iloc[i]['vecm'] ))
+        spread.index= data.index
+        data['spread'] = spread
+        projected =  data2.index.to_series().apply(lambda i: 
+                    self.get_projected(slicer.get(i), data2.iloc[i]['vecm'] ))
+        projected.index = data.index
+        has_projected = not projected[~projected.isna()].empty
+        if has_projected:
+            data[['projected_%s' % x for x in keys]] = projected.apply(pd.Series)
+        if raw:
+            return data
+        
+        for key in pairs:
+            if has_projected:
+                upper_bound = data[key].max()*1.02
+                lower_bound = data[key].min() *0.98
+                # Clamp the projected value between these bounds
+                data['projected_%s' % key] = data['projected_%s' % key].clip(lower=lower_bound, upper=upper_bound)
+                self.plot_spread(data, [key, 'projected_%s' % key])
+            else:
+                self.plot_spread(data, key)
+
+
     def get_currency_to_usd(self, currency):
         """
         Returns a Series representing the USD value of one unit of `currency`.
@@ -176,48 +251,6 @@ class VECM:
         pivot_df = pivot_df.ffill().dropna()
 
         return pivot_df
-
-
-    def get_pca_components(self, chart=False, min_variance=0.05):
-        scaler = StandardScaler()
-        fname =f'files/pca/pca_raw.parquet'
-        assert os.path.exists(fname), "src/csv/Please run pca_raw.py"
-        data=  pd.read_parquet(fname)
-        print(f"Data shape before {data.shape}" )
-        data =data.replace([np.inf, -np.inf], np.nan).dropna(axis=1)
-        print(f"Data shape after {data.shape}" )
-        X_scaled = scaler.fit_transform(data)
-
-        pca = PCA()
-        principalComponents = pca.fit_transform(X_scaled)
-
-        # To see the variance explained by each component
-        explained_variance = pca.explained_variance_ratio_
-        import matplotlib.pyplot as plt
-        explained_variance2 = explained_variance[:40]
-
-        if chart:
-            # Create a scree plot
-            plt.figure(figsize=(10, 5))
-            plt.plot(range(1, len(explained_variance2) + 1), explained_variance2, marker='o', linestyle='-')
-            plt.title('Scree Plot of PCA')
-            plt.xlabel('Principal Component')
-            plt.ylabel('Variance Explained')
-            plt.xticks(range(1, len(explained_variance2) + 1))  # Ensure x-axis labels match the number of components
-            plt.grid(True)
-            plt.show()
-
-        n_components = np.where(explained_variance>min_variance)[0][-1]+1
-
-        cumsum = explained_variance[:n_components].sum()*100
-        print("this explained %.2f%% of variance" % cumsum)
-        pca = PCA(n_components=n_components)
-        principalComponents = pca.fit_transform(X_scaled)
-
-        return pd.DataFrame(data = principalComponents,
-                            columns = [f'principal_component_{i}' for i in range(n_components)],
-                            index=data.index
-                            )
     
 
     def unit_root_test(self, col, level=0, stats=False):
@@ -314,6 +347,10 @@ class VECM:
             data2[['projected_%s' % x for x in pairs]] = projected
             if spread_scaled is not None:
                 for col in pairs:
+                    upper_bound = data2[col].max()*1.02
+                    lower_bound = data2[col].min() *0.98
+                    # Clamp the projected value between these bounds
+                    data2['projected_%s' % col] = data2['projected_%s' % col].clip(lower=lower_bound, upper=upper_bound)
                     self.plot_spread(data2, [col, 'projected_%s' % col])
 
         return vecm_result
@@ -338,7 +375,10 @@ class VECM:
             a_j = vecm_result.alpha[j, :]      # adjustment coefficients for equation j, shape: (r,)
 
             # Denom: D = ∑_{i=1}^{r} a[j,i] * beta[j, i]
-            sum_ac = np.dot(a_j, c_vec.T)  #to achieve (∑₍ᵢ₌₁₎ʳ aᵢ · cᵢ) )
+            if c_vec.shape[0] ==0:
+                sum_ac = 0 #no intercept
+            else:
+                sum_ac = np.dot(a_j, c_vec.T)  #to achieve (∑₍ᵢ₌₁₎ʳ aᵢ · cᵢ) )
             D = np.dot(a_j, beta[j, :])
             sum_aby =np.zeros(data.shape[0])
             n = beta.shape[0]
