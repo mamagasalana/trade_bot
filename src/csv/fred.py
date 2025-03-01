@@ -30,8 +30,8 @@ CCY_MAP = {
 }
 
 class FRED:
-    def __init__(self, end_year=2024):
-        self.start_year = 2009
+    def __init__(self, end_year=2024, start_year=2009):
+        self.start_year = start_year
         self.end_year= end_year
     
     @property
@@ -50,7 +50,7 @@ class FRED:
 
     def get_tag(self, tag, _list=False):
         self.ccy = tag
-        df =Tags.series.get(tag_names="daily", paginate=True)  
+        df =Tags.series.get(tag_names=tag, paginate=True)  
 
         df['last_updated'] = df.last_updated.apply(lambda x : datetime.datetime.strptime(x[:19],'%Y-%m-%d %H:%M:%S'))
         df['o1'] = pd.to_datetime(df.observation_start)
@@ -113,7 +113,7 @@ class FRED:
                 df['currency'] = self.ccy
                 df['eclass'] = eclass
                 df['datetime'] = pd.to_datetime(df.datetime)
-                ret.append(df[df.datetime.dt.year >=self.start_year])
+                ret.append(df)
         except:
             print(list(eventids).index(eventid))
             raise

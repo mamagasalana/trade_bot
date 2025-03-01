@@ -46,11 +46,16 @@ class custom_PCA:
         else: 
             return ret
     
-    def get_pca_components(self, chart=False, min_variance=0.05):
+    def get_pca_components(self, data=None, chart=False, min_variance=0.05):
         scaler = StandardScaler()
-        fname =f'files/pca/pca_raw.parquet'
-        assert os.path.exists(fname), "src/csv/Please run pca_raw.py"
-        data=  pd.read_parquet(fname)
+        save_flag= False
+
+        if data is None:
+            save_flag= True
+            fname =f'files/pca/pca_raw.parquet'
+            assert os.path.exists(fname), "src/csv/Please run pca_raw.py"
+            data=  pd.read_parquet(fname)
+
         print(f"Data shape before {data.shape}" )
         data =data.replace([np.inf, -np.inf], np.nan).dropna(axis=1)
         print(f"Data shape after {data.shape}" )
@@ -86,6 +91,6 @@ class custom_PCA:
                             columns = [f'principal_component_{i}' for i in range(n_components)],
                             index=data.index
                             )
-        
-        df.to_csv(self.get_next_version())
+        if save_flag:
+            df.to_csv(self.get_next_version())
         return df

@@ -121,7 +121,7 @@ class VECM:
         # Adding a title and legend
         # fig.tight_layout()  # otherwise the right y-label is slightly clipped
         plt.title(f'Actual vs. Spread')
-        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+        fig.legend(loc="upper left", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
         plt.show()
 
     def plot_historical_vecm(self, pairs: list, 
