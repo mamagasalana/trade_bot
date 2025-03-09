@@ -1,0 +1,17 @@
+{
+    "pairs": [],
+    "na_threshold" : "this use value from HELPER.find_na_threshold if not set", 
+    "exclude_weekend" : "to exclude weekend",
+    "additional_datafiles" : [
+        {
+            "script" : "test.py"
+        }
+    ],
+
+    "preprocess" : {
+        "script" : "test.py",
+        "params" : []
+    }
+
+
+}

@@ -2,6 +2,7 @@ import pandas as pd
 
 class Slicer:
     def __init__(self, data : pd.DataFrame, mode):
+        self.data_index =data.index.to_numpy()
         self.data = data.to_numpy()
         self.mode = mode
 
@@ -26,3 +27,15 @@ class Slicer:
             return self.data[max(0, i- 5*260 +1) : i+1]
         elif self.mode == 'rolling15':
             return self.data[max(0, i- 15*260 +1) : i+1]
+    
+    def get_index(self, i):
+        if self.mode == 'fix_start':
+            return self.data_index[:i+1]
+        elif self.mode == 'fix_end':
+            return self.data_index[i:]
+        elif self.mode == 'rolling10':
+            return self.data_index[max(0, i- 10*260 +1) : i+1]
+        elif self.mode == 'rolling5':
+            return self.data_index[max(0, i- 5*260 +1) : i+1]
+        elif self.mode == 'rolling15':
+            return self.data_index[max(0, i- 15*260 +1) : i+1]

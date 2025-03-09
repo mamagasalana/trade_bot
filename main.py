@@ -1,53 +1,40 @@
 import os
 import json
-import shutil
+import datetime
 import subprocess
-from datetime import datetime
+import shutil
 
-class OutputTracker:
-    def __init__(self, config_file="config.json"):
-        self.config_file = config_file
-        self.config = self.load_config()
-
-    def load_config(self):
-        """Loads the configuration from the JSON file."""
-        with open(self.config_file, "r") as f:
-            return json.load(f)
-
-    def execute_script(self, script, params):
-        """Executes the given script with parameters."""
-        command = ["python", script] + params
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            print(f"Executed {script} successfully:\n{result.stdout}")
-        except subprocess.CalledProcessError as e:
-            print(f"Error executing {script}: {e.stderr}")
-
-    def save_config_and_script(self, preprocess_script):
-        """Saves the current config and preprocessing script in a new folder inside 'output/'."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        folder_name = os.path.join("output", f"preprocess_output_{timestamp}")
-        os.makedirs(folder_name, exist_ok=True)
-
-        # Save config.json
-        config_path = os.path.join(folder_name, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(self.config, f, indent=4)
-
-        # Save preprocess script
-        script_path = os.path.join(folder_name, os.path.basename(preprocess_script))
-        shutil.copy(preprocess_script, script_path)
-
-        print(f"Saved config and script to {folder_name}")
-
-    def run(self):
-        """Runs the preprocessing steps as per the config file."""
-        preprocess_script = self.config["preprocess"]["script"]
-        preprocess_params = self.config["preprocess"]["params"]
-
-        self.execute_script(preprocess_script, preprocess_params)
-        self.save_config_and_script(preprocess_script)
+def main():
+    # Load configuration from config.json (assumed in same directory as main.py)
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    
+    # Create a unique output folder using the current timestamp
+    folder_name = "test_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(folder_name, exist_ok=True)
+    
+    script = config.get("script")
+    pairs = config.get("pairs", ["CADCHF", "USDCAD"])
+    na_threshold = config.get("na_threshold", 0.9)
+    exclude_weekend = config.get("exclude_weekend", 1)
+    
+    main_params = [
+        "--pairs", ",".join(pairs),
+        "--na_threshold", str(na_threshold),
+        "--exclude_weekend", str(exclude_weekend)
+    ]
+    
+    shutil.copy(script, folder_name)
+    # Change current working directory into the newly created folder
+    os.chdir(folder_name)
+    print("Changed working directory to:", os.getcwd())
+    # Construct the absolute path to test.py (assumed to be in the same directory as main.py)
+    test_script = os.path.join(os.path.dirname(__file__), "test.py")
+    
+    # Run test.py (its output will be saved to the current working directory)
+    subprocess.run(["python", test_script] + main_params, check=True)
+    
 
 if __name__ == "__main__":
-    manager = OutputTracker()
-    manager.run()
+    main()
