@@ -33,10 +33,59 @@ class FRED:
     def __init__(self, end_year=2024, start_year=2009):
         self.start_year = start_year
         self.end_year= end_year
+        self.usd_ccy_list = None
     
     @property
     def filename(self):
         return f'files/fred/{self.ccy}.csv'
+    
+
+    def get_currency_to_usd(self, currency):
+        """
+        Returns a Series representing the USD value of one unit of `currency`.
+        If the pair is quoted as 'CURUSD', it's direct.
+        If it's quoted as 'USDCUR', we return the reciprocal.
+        """
+        if self.usd_ccy_list is None:
+            self.usd_ccy_list = self.get_ccy()
+        # If the currency is already USD, then 1 USD = 1.
+        if currency == 'USD':
+            return 1
+        # Check for direct pair like 'AUDUSD'
+        direct = currency + 'USD'
+        if direct in self.usd_ccy_list.columns:
+            return self.usd_ccy_list[direct]
+        # Otherwise, check for inverse pair like 'USDAUD'
+        inverse = 'USD' + currency
+        if inverse in self.usd_ccy_list.columns:
+            return 1 / self.usd_ccy_list[inverse]
+        # If neither is available, raise an error
+        raise KeyError(f"Conversion for currency {currency} not found in DataFrame columns.")
+
+    def get_pairs(self, pairs: list):
+        """
+        get pairs from fred, manually generate exotic pairs 
+        """
+        if self.usd_ccy_list is None:
+            self.usd_ccy_list = self.get_ccy()
+            
+        for pair in pairs:
+            # If the pair is already present, skip it.
+            if pair in self.usd_ccy_list.columns:
+                continue
+
+            # Extract base and quote currencies (first 3 letters are base, last 3 are quote)
+            base, quote = pair[:3], pair[3:]
+            
+            # Get USD conversion for base and quote
+            base_to_usd = self.get_currency_to_usd(base)
+            quote_to_usd = self.get_currency_to_usd(quote)
+            exotic_rate = base_to_usd / quote_to_usd
+
+            # Add the new exotic pair column to your DataFrame
+            self.usd_ccy_list[pair] = exotic_rate
+            print(f"Generated exotic pair {pair}.")
+        return self.usd_ccy_list[pairs].dropna()
     
     def get_ccy(self):
         self.ccy = 'ccy'

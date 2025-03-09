@@ -23,7 +23,6 @@ pandarallel.initialize(progress_bar=True)
 class VECM:
     def __init__(self):
         self.fr = FRED()
-        self.usd_ccy_list = self.fr.get_ccy()
         self.debug=True
         #365 - 52*2 = 261 days (after excluded weekend)
         self.custom_pca = custom_PCA()
@@ -45,7 +44,7 @@ class VECM:
         if os.path.exists(filename):
             data2= pd.read_pickle(filename)
         else:
-            data = self.get_pairs(pairs)
+            data = self.fr.get_pairs(pairs)
             if qry is not None:
                 data = data.query(qry)
 
@@ -80,7 +79,7 @@ class VECM:
             data2= pd.read_pickle(filename2)
             vecm_result = pd.read_pickle(filename)
         else:
-            data_raw = self.get_pairs(pairs)
+            data_raw = self.fr.get_pairs(pairs)
             data_pca = pd.read_csv(self.custom_pca.get_version(version=version))
             data= data_pca.merge(data_raw, how='left', left_on='row', right_index=True).dropna()
             data2 = data.set_index(['row', 'block'])
@@ -107,7 +106,7 @@ class VECM:
         if os.path.exists(filename):
             data2= pd.read_pickle(filename)
         else:
-            data = self.get_pairs(pairs)
+            data = self.fr.get_pairs(pairs)
             if qry is not None:
                 data = data.query(qry)
             data2= data.reset_index(drop=True)
@@ -216,48 +215,6 @@ class VECM:
             else:
                 self.plot_spread(data, key)
 
-
-    def get_currency_to_usd(self, currency):
-        """
-        Returns a Series representing the USD value of one unit of `currency`.
-        If the pair is quoted as 'CURUSD', it's direct.
-        If it's quoted as 'USDCUR', we return the reciprocal.
-        """
-        # If the currency is already USD, then 1 USD = 1.
-        if currency == 'USD':
-            return 1
-        # Check for direct pair like 'AUDUSD'
-        direct = currency + 'USD'
-        if direct in self.usd_ccy_list.columns:
-            return self.usd_ccy_list[direct]
-        # Otherwise, check for inverse pair like 'USDAUD'
-        inverse = 'USD' + currency
-        if inverse in self.usd_ccy_list.columns:
-            return 1 / self.usd_ccy_list[inverse]
-        # If neither is available, raise an error
-        raise KeyError(f"Conversion for currency {currency} not found in DataFrame columns.")
-
-    def get_pairs(self, pairs: list):
-        """
-        get pairs from fred, manually generate exotic pairs 
-        """
-        for pair in pairs:
-            # If the pair is already present, skip it.
-            if pair in self.usd_ccy_list.columns:
-                continue
-
-            # Extract base and quote currencies (first 3 letters are base, last 3 are quote)
-            base, quote = pair[:3], pair[3:]
-            
-            # Get USD conversion for base and quote
-            base_to_usd = self.get_currency_to_usd(base)
-            quote_to_usd = self.get_currency_to_usd(quote)
-            exotic_rate = base_to_usd / quote_to_usd
-
-            # Add the new exotic pair column to your DataFrame
-            self.usd_ccy_list[pair] = exotic_rate
-            print(f"Generated exotic pair {pair}.")
-        return self.usd_ccy_list[pairs].dropna()
 
     def get_data(self, raw=False):
         df = self.fr.get_tag('daily')
@@ -438,4 +395,4 @@ class VECM:
 
 if __name__ == '__main__':
     v =VECM()
-    v.get_pca_components()
+    v.compute_historical_vecm_pca(['CADCHF', 'EURCHF'], 'fix_start')
