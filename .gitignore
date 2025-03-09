@@ -12,3 +12,5 @@ test.py
 finagg/*
 findata/*
 .env
+test.py
+config.json

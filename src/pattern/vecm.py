@@ -13,11 +13,11 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import numpy as np
 import os
 from functools import partial
-from pandarallel import pandarallel
 from src.csv.slicer import Slicer
 from tqdm import tqdm
 import multiprocessing as mp
 
+from pandarallel import pandarallel
 pandarallel.initialize(progress_bar=True)
 
 class VECM:
@@ -53,9 +53,7 @@ class VECM:
             data = data.merge(data_pca, how='inner', left_index=True, right_on='datetime')
             data = data.set_index('datetime') 
             data2= data.reset_index(drop=True)
-            modes = ['fix_start', 'fix_end', 'rolling10', 'rolling15', 'rolling5']
 
-            assert mode in modes, f'mode must be one of {modes}'
             slicer = Slicer(data2, mode)
 
             results = data2.index.to_series().parallel_apply(lambda i: 
@@ -66,6 +64,35 @@ class VECM:
             data2.to_pickle(filename)
         
         return data2
+    
+
+    def compute_historical_vecm_pca_v2(self, pairs: list, 
+                                mode: str, 
+                                deterministic= "ci",
+                                version:int=1):
+        self.debug=False
+        pca_version = self.custom_pca.get_version(version=version,base=True)
+        
+        filename = f'files/cointegration/pcav2_{pca_version}_{"_".join(sorted(pairs))}_{mode}_{deterministic}.pkl'
+        filename2 = f'files/cointegration/pcav2_{pca_version}_{"_".join(sorted(pairs))}_{mode}_{deterministic}_support.pkl'
+
+        if os.path.exists(filename):
+            data2= pd.read_pickle(filename2)
+            vecm_result = pd.read_pickle(filename)
+        else:
+            data_raw = self.get_pairs(pairs)
+            data_pca = pd.read_csv(self.custom_pca.get_version(version=version))
+            data= data_pca.merge(data_raw, how='left', left_on='row', right_index=True).dropna()
+            data2 = data.set_index(['row', 'block'])
+            
+
+            results = data2.index.get_level_values("block").unique().to_series().parallel_apply(lambda i: 
+                self.vecm_model(data2.xs(i, level='block').reset_index(drop=True), deterministic=deterministic))
+            
+            vecm_result = pd.Series(results, index=data2.index.get_level_values("block").unique(), name='vecm')
+            vecm_result.to_pickle(filename)
+            data2.to_pickle(filename2)
+        return data2, vecm_result
     
     def compute_historical_vecm(self, pairs: list, 
                                 mode: str, 
@@ -84,9 +111,7 @@ class VECM:
             if qry is not None:
                 data = data.query(qry)
             data2= data.reset_index(drop=True)
-            modes = ['fix_start', 'fix_end', 'rolling10', 'rolling15', 'rolling5']
 
-            assert mode in modes, f'mode must be one of {modes}'
             slicer = Slicer(data2, mode)
 
             results = data2.index.to_series().parallel_apply(lambda i: 
