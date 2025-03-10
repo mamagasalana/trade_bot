@@ -34,6 +34,8 @@ def main():
     
     # Run test.py (its output will be saved to the current working directory)
     subprocess.run(["python", test_script] + main_params, check=True)
+
+    shutil.move(folder_name, 'output/')
     print("Time taken: %s" % (time.time()-start))
 
 if __name__ == "__main__":
