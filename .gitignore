@@ -14,3 +14,4 @@ findata/*
 .env
 test.py
 config.json
+*.pkl
