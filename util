@@ -1,0 +1,37 @@
+[33mcdcd49a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m preprocess version control(3) -- save folders in output
+[33m62ceb2f[m preprocess version control (2)
+[33m2459a6c[m main.py for preprocess version control
+[33m5474a63[m refactor getpairs
+[33m990e9b6[m compute_historical_vecm_pca_v2
+[33mf089897[m vecm with bond rate differentials
+[33mc4ca775[m vecm pca
+[33m81114cf[m visualize project history
+[33m1e19ecc[m pca raw file, visualize projection
+[33m8dd1464[m fred currency, slicer, vecm visualize refactor and compute history
+[33m241311d[m debug mode , silent mode
+[33m451a1ed[m vecm spread difference
+[33m06223f1[m spread vecm
+[33m6c0177c[m vecm visualize, pandas  pivot fixes
+[33mff17722[m boj
+[33m14d6dc6[m cache fred locally ( web cache only last for 1 week)
+[33md9bb36a[m fred data for analysis
+[33m5dfd443[m fix concat warning
+[33m5155758[m optimize cusum analysis
+[33m1f56063[m update requirements.txt
+[33m93a8c34[m cumsum analysis with mode (before, after, between, all) , and shift
+[33m99286c8[m refactor dendrogram  chart
+[33mc2e9d50[m plot chart of same cluster
+[33m52d59eb[m event correlation, modular  event_metadata, query_ff
+[33m1fe8474[m parse format, reader exclude "Pass"
+[33mc56b71e[m dendrogram fcluster
+[33m5223991[m dendrogram
+[33mec4e8c5[m economic classification
+[33m1796fc9[m forexfactory economic metadata
+[33m12a18f4[m forexfactory, currency cache
+[33m09de5ad[m cumsum
+[33mb4e373a[m reuse for ccy analysis
+[33m886e654[m Survival mode
+[33m5c2f3ed[m requirements , gitignore
+[33m6f12303[m first commit
+[33md84d8d4[m initial commit
+[33mefeb769[m initial commit
