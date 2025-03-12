@@ -16,9 +16,10 @@ from functools import partial
 from src.csv.slicer import Slicer
 from tqdm import tqdm
 import multiprocessing as mp
-
+import pickle
 from pandarallel import pandarallel
 pandarallel.initialize(progress_bar=True)
+import json
 
 class VECM:
     def __init__(self):
@@ -64,34 +65,6 @@ class VECM:
         
         return data2
     
-
-    def compute_historical_vecm_pca_v2(self, pairs: list, 
-                                mode: str, 
-                                deterministic= "ci",
-                                version:int=1):
-        self.debug=False
-        pca_version = self.custom_pca.get_version(version=version,base=True)
-        
-        filename = f'files/cointegration/pcav2_{pca_version}_{"_".join(sorted(pairs))}_{mode}_{deterministic}.pkl'
-        filename2 = f'files/cointegration/pcav2_{pca_version}_{"_".join(sorted(pairs))}_{mode}_{deterministic}_support.pkl'
-
-        if os.path.exists(filename):
-            data2= pd.read_pickle(filename2)
-            vecm_result = pd.read_pickle(filename)
-        else:
-            data_raw = self.fr.get_pairs(pairs)
-            data_pca = pd.read_csv(self.custom_pca.get_version(version=version))
-            data= data_pca.merge(data_raw, how='left', left_on='row', right_index=True).dropna()
-            data2 = data.set_index(['row', 'block'])
-            
-
-            results = data2.index.get_level_values("block").unique().to_series().parallel_apply(lambda i: 
-                self.vecm_model(data2.xs(i, level='block').reset_index(drop=True), deterministic=deterministic))
-            
-            vecm_result = pd.Series(results, index=data2.index.get_level_values("block").unique(), name='vecm')
-            vecm_result.to_pickle(filename)
-            data2.to_pickle(filename2)
-        return data2, vecm_result
     
     def compute_historical_vecm(self, pairs: list, 
                                 mode: str, 
@@ -122,7 +95,7 @@ class VECM:
         
         return data2
     
-    def plot_spread(self, data, key):
+    def plot_spread(self, data, key, title=f'Actual vs. Spread'):
         fig, ax1 = plt.subplots(figsize=(12, 4))
 
         # Plot actual and modeled oil prices on the primary y-axis
@@ -144,8 +117,8 @@ class VECM:
 
         # Adding a title and legend
         # fig.tight_layout()  # otherwise the right y-label is slightly clipped
-        plt.title(f'Actual vs. Spread')
-        fig.legend(loc="upper left", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+        plt.title(title)
+        fig.legend(loc="upper left", bbox_to_anchor=(1.02,1), bbox_transform=ax1.transAxes)
         plt.show()
 
     def plot_historical_vecm(self, pairs: list, 
@@ -178,43 +151,36 @@ class VECM:
             else:
                 self.plot_spread(data, key)
 
-    def plot_historical_vecm_pca(self, pairs: list, 
-                             mode: str, 
-                             mode2: str=None, 
-                             qry : str=None,
-                             deterministic= "ci", 
-                             raw=False,
-                             version=1):
-        data = self.compute_historical_vecm_pca(pairs=pairs, mode=mode, qry=qry, deterministic=deterministic, version=version)
-        data2 = data.reset_index(drop=True)
-        if mode2 is None:
-            mode2 = mode
+    def plot_historical_vecm_v2(self, folder):
+        config = json.load(open(os.path.join(folder,  'config.json'), 'r'))
+        pairs= config['pairs']
+        mode = config['slicing_mode']
+        print(f'{pairs} {mode}')
+        with open(os.path.join(folder,  "vecm_results.pkl"), "rb") as f:
+            vecm_results_dict = pickle.load(f)
+        df = pd.read_csv(os.path.join(folder,  'datafile.csv'), index_col=[0, 1])
         
-        keys = [x for x in data.columns if x!='vecm']
-        slicer = Slicer(data2[keys], mode2)
-        spread = data2.index.to_series().apply(lambda i: 
-                    self.get_scaled_spread(slicer.get(i), data2.iloc[i]['vecm'] ))
-        spread.index= data.index
-        data['spread'] = spread
-        projected =  data2.index.to_series().apply(lambda i: 
-                    self.get_projected(slicer.get(i), data2.iloc[i]['vecm'] ))
-        projected.index = data.index
-        has_projected = not projected[~projected.isna()].empty
-        if has_projected:
-            data[['projected_%s' % x for x in keys]] = projected.apply(pd.Series)
-        if raw:
-            return data
-        
-        for key in pairs:
-            if has_projected:
-                upper_bound = data[key].max()*1.02
-                lower_bound = data[key].min() *0.98
-                # Clamp the projected value between these bounds
-                data['projected_%s' % key] = data['projected_%s' % key].clip(lower=lower_bound, upper=upper_bound)
-                self.plot_spread(data, [key, 'projected_%s' % key])
-            else:
-                self.plot_spread(data, key)
+        unique_blocks = df.index.get_level_values(0).unique()
+        blocks_series2 = pd.Series(unique_blocks)
+        spread = blocks_series2.apply(lambda i: self.get_scaled_spread(df.xs(i, level=0).to_numpy(), vecm_results_dict.get(i)))
+        projected =  blocks_series2.apply(lambda i: self.get_projected(df.xs(i, level=0).to_numpy(), vecm_results_dict.get(i)))
 
+        fx = self.fr.get_pairs(pairs)
+        projected_array = np.vstack(projected.to_numpy())  # Converts list-like rows into a 2D NumPy array
+        spread_array = spread.to_numpy().reshape(-1, 1)  # Convert spread to column vector (3298,1)
+
+        # Now we can hstack without issues
+        result = np.hstack([projected_array, spread_array])
+        newidx = df.index.to_frame(index=False).groupby(0)[1].last()
+        projected_fx = pd.DataFrame(result , index=newidx, columns=['projected_%s' % x for x in df.columns]+['spread'])
+
+        fx2 = fx.merge(projected_fx, how='right', left_index=True, right_index=True)
+        for key in pairs:
+            upper_bound = fx2[key].max()*1.02
+            lower_bound = fx2[key].min() *0.98
+            # Clamp the projected value between these bounds
+            fx2['projected_%s' % key] = fx2['projected_%s' % key].clip(lower=lower_bound, upper=upper_bound)
+            self.plot_spread(fx2, [key, 'projected_%s' % key], title=f'{"_".join(pairs)} {mode}')
 
     def get_data(self, raw=False):
         df = self.fr.get_tag('daily')
@@ -348,6 +314,8 @@ class VECM:
         # general equation to express x in terms of y
         # xₜ = - ( (∑₍ᵢ₌₁₎ʳ aᵢ · (Bᵢ ⋅ yₜ)) + (∑₍ᵢ₌₁₎ʳ aᵢ · cᵢ) ) / (∑₍ᵢ₌₁₎ʳ aᵢ · bᵢ)
         if vecm_result is None:
+            if not raw:
+                return np.full(data.shape[1], np.nan)
             return
 
         out = []

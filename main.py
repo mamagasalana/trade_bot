@@ -19,10 +19,11 @@ def main():
     exclude_weekend = config.get("exclude_weekend")
     version = config.get("version")
     slicing_mode = config.get("slicing_mode", "fix_start")
+    pca_components = config.get("pca_components", 3)
     vecm_deterministic = config.get("vecm", {}).get("deterministic", "nc")
     
     # Create a unique output folder using the current timestamp
-    folder_name = f"{version}_{'_'.join(pairs)}" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = f"{version}_{'_'.join(pairs)}_{slicing_mode}" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(folder_name, exist_ok=True)
 
     main_params = [
@@ -31,7 +32,8 @@ def main():
         "--exclude_weekend", str(exclude_weekend),
         "--folder", folder_name,
         "--slicing_mode", slicing_mode,
-        "--vecm_deterministic", vecm_deterministic
+        "--vecm_deterministic", vecm_deterministic,
+        "--pca_components", pca_components
     ]
     
     shutil.copy(script, folder_name)
