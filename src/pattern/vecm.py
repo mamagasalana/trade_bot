@@ -20,6 +20,8 @@ import pickle
 from pandarallel import pandarallel
 pandarallel.initialize(progress_bar=True)
 import json
+from src.pattern.mgarch import DCCGARCH_Multi
+
 
 class VECM:
     def __init__(self):
@@ -309,6 +311,55 @@ class VECM:
 
         # print(f"RMSE: {rmse}")
         # print(f"MAE: {mae}")
+
+    def vecm_model_with_DCC(self, data, det_order=0, deterministic='ci', visualize=False):
+
+        if data.shape[0] < 1000:
+            return None
+        
+        k_ar_diff = self.select_order(data)
+        num_of_cointegration, _ = self.cointegration_test(data, det_order=det_order, k_ar_diff=k_ar_diff)
+
+        self.custom_print(f'k_ar_diff: {k_ar_diff}, num_of_cointegration: {num_of_cointegration}')
+        # assert  num_of_cointegration, "No cointegration"
+        if not num_of_cointegration:
+            return None
+
+        model = vecm.VECM(data, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
+        vecm_result = model.fit()
+        self.custom_print(vecm_result.summary())
+        
+        residuals = pd.DataFrame(vecm_result.resid, index=data.index[-len(vecm_result.resid):], columns=data.columns)
+        dcc_model = DCCGARCH_Multi(residuals)
+        dcc_model.fit()
+        self.custom_print(f"Estimated DCC Parameters: {dcc_model.get_dcc_params()}")
+
+        # Obtain the standardized residuals (i.e. scaled residuals)
+        scaled_residuals = dcc_model.std_resid.copy()
+
+        # ----- Refit a new VECM model using the scaled residuals -----
+        new_model = vecm.VECM(scaled_residuals, k_ar_diff=k_ar_diff, coint_rank=num_of_cointegration, deterministic=deterministic)
+        new_vecm_result = new_model.fit()
+        self.custom_print("Refitted VECM model (using DCC-scaled residuals) summary:")
+        self.custom_print(new_vecm_result.summary())
+
+        if visualize:
+            pairs = scaled_residuals.columns
+            spread_scaled = self.get_scaled_spread(scaled_residuals.to_numpy(), new_vecm_result, raw=True)
+            projected = self.get_projected(scaled_residuals.to_numpy(), new_vecm_result, raw=True)
+            data2 = scaled_residuals.copy()
+            data2['spread'] = spread_scaled
+            data2[['projected_%s' % x for x in pairs]] = projected
+            if spread_scaled is not None:
+                for col in pairs:
+                    upper_bound = data2[col].max()*1.02
+                    lower_bound = data2[col].min() *0.98
+                    # Clamp the projected value between these bounds
+                    data2['projected_%s' % col] = data2['projected_%s' % col].clip(lower=lower_bound, upper=upper_bound)
+                    self.plot_spread(data2, [col, 'projected_%s' % col])
+
+        return new_vecm_result
+    
 
     def get_projected(self, data, vecm_result: vecm.VECMResults, raw=False):
         # general equation to express x in terms of y

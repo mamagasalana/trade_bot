@@ -12,3 +12,7 @@ pyarrow
 fastparquet
 parallel-pandas
 pandarallel
+arch
+tensorflow
+tensorflow-probability
+tensorflow-probability[tf]
