@@ -2,6 +2,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 class HELPER:
 
@@ -62,3 +63,51 @@ class HELPER:
 
         print(f"Recommended threshold: {optimal_threshold:.2f}")
         return optimal_threshold
+    
+    @staticmethod
+    def get_scaled(df):
+        scaler = StandardScaler()
+        if isinstance(df, pd.Series):
+            prescale = df.to_frame()
+        else:
+            prescale = df
+            
+        return pd.DataFrame(
+            scaler.fit_transform(prescale),
+            index=prescale.index,
+            columns=prescale.columns)
+    
+    @classmethod
+    def plot_chart(cls, f1: pd.DataFrame, f2: pd.DataFrame=None, scale=False):
+        """ plot chart
+
+        Args:
+            f1 (pd.DataFrame): this is to be plotted on axes 1
+            f2 (pd.DataFrame): this is to be plotted on axes 2
+            scale: apply standard scaler for f2
+        """
+        f1_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink']
+        f2_colors = ['gray', 'tab:olive', 'tab:cyan', 'tab:gray', 'black', 'magenta', 'gold']
+
+        fig, ax1 = plt.subplots(figsize=(13, 4))
+        # Plot actual and modeled oil prices on the primary y-axis
+        color = 'tab:blue'
+        ax1.set_xlabel('Date')
+        f1.plot(ax=ax1, legend=False, color=f1_colors)
+        ax1.tick_params(axis='y', labelcolor=color)
+
+        if f2 is not None:
+        # Create a second y-axis 
+
+            ax2 = ax1.twinx()
+            color = 'tab:green'
+            ax2.set_ylabel('spread', color=color) 
+            if scale:
+                df_scaled = cls.get_scaled(f2)
+                df_scaled.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
+                ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+                ax2.axhline(2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+            else:
+                f2.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
+            ax2.tick_params(axis='y', labelcolor=color)
+            ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
