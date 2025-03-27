@@ -65,20 +65,50 @@ class HELPER:
         return optimal_threshold
     
     @staticmethod
-    def get_scaled(df):
-        scaler = StandardScaler()
+    def get_scaled(df: pd.DataFrame, train_ratio: float = 0.8, test_only=False) -> pd.DataFrame:
+        """
+        Scale a DataFrame using StandardScaler fit on training data only.
+        
+        Args:
+            df (pd.DataFrame or pd.Series): Input data to scale
+            train_ratio (float): Fraction of data to use as training set
+
+        Returns:
+            pd.DataFrame: Scaled version of full input, using training stats
+        """
         if isinstance(df, pd.Series):
-            prescale = df.to_frame()
+            df = df.to_frame()
+
+        split_idx = int(len(df) * train_ratio)
+        train_df = df.iloc[:split_idx]
+        if train_df.notnull().sum().sum() < 1000:
+            return
+        test_df = df.iloc[split_idx:]
+
+        scaler = StandardScaler()
+        train_scaled = scaler.fit_transform(train_df)
+        if not test_df.empty:
+            test_scaled = scaler.transform(test_df)
         else:
-            prescale = df
-            
-        return pd.DataFrame(
-            scaler.fit_transform(prescale),
-            index=prescale.index,
-            columns=prescale.columns)
+            test_scaled = np.empty((0, train_scaled.shape[1]))
+
+        if test_only:
+            return pd.DataFrame(
+                np.vstack([test_scaled]),
+                index=test_df.index,
+                columns=test_df.columns
+            )
+        else:
+            return pd.DataFrame(
+                np.vstack([train_scaled, test_scaled]),
+                index=df.index,
+                columns=df.columns
+            )
+
     
     @classmethod
-    def plot_chart(cls, f1: pd.DataFrame, f2: pd.DataFrame=None, scale=False):
+    def plot_chart(cls, f1: pd.DataFrame, f2: pd.DataFrame=None, scale=False,
+                   hline=None, title=None):
         """ plot chart
 
         Args:
@@ -109,5 +139,14 @@ class HELPER:
                 ax2.axhline(2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
             else:
                 f2.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
+            if hline:
+                ax2.axhline(-hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
+                ax2.axhline(hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
+
             ax2.tick_params(axis='y', labelcolor=color)
             ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+
+        fig.legend(loc="upper left", bbox_to_anchor=(1.02,1), bbox_transform=ax1.transAxes)
+        if title:
+            plt.title(title)
+        plt.show()

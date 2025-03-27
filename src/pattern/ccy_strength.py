@@ -6,13 +6,15 @@ import matplotlib.pyplot as plt
 import itertools
 from sklearn.preprocessing import StandardScaler
 from src.pattern.helper import HELPER
+from tqdm import tqdm
 
 CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR']
 
 class CCY_STR:
     def __init__(self):
         self.fr = FRED()
-
+        self.get_all_pairs()
+        self.pnl = {}
     def get_all_pairs(self) -> pd.DataFrame:
         """Compute currency strength index using USD as anchor."""
         # pairs= [ccy+denominated_ccy for ccy in CURRENCIES]
@@ -92,58 +94,96 @@ class CCY_STR:
 
         return zscore_df
     
-    def get_pnl(self, window=200):
+    def compare_pnl(self, train_ratio, method=['spread']):
+        key = ''.join([str(train_ratio)] + sorted(method))
+
+        if not key in self.pnl:
+            out = []
+            for window in tqdm(range( 10, 700, 10)):
+                df = self.get_pnl(window, train_ratio=train_ratio, method=method)
+                if df.empty:
+                    break
+
+                df2 = self.get_pnl(window, train_ratio=train_ratio, method=method, test_only=True)
+                if df2.empty:
+                    break
+                xx = df.groupby(['ccy', 'method'])['return'].sum().sort_values(ascending=False)
+                xx2 = df2.groupby(['ccy', 'method'])['return'].sum().sort_values(ascending=False)
+                out.append([xx.xs(key=m, level=1).sum() for m in method] + [xx2.xs(key=m, level=1).sum() for m in method])
+            columns = ['full_%s' % m for m in method ] + ['test_%s' % m for m in method]
+            self.pnl[key] = pd.DataFrame(out, columns=columns)
+        HELPER.plot_chart(self.pnl[key],title=key)
+        return self.pnl[key]
+    
+    def get_pnl(self, window=200, window2=None, train_ratio=0.7, method=['spread'], test_only=False) -> pd.DataFrame:
+        """This generates PnL
+
+        Args:
+            window (int, optional): window used for compute strength. Defaults to 200.
+            window2 (_type_, optional): window used for compute rolling csi zscore. Defaults to None. If None is used, it will use window instead.
+
+        Returns:
+            pd.DataFrame: PnL dataframe
+        """
+        if not window2:
+            window2 = window
         out = []
         prices = self.get_all_pairs()
         returns = self.compute_strength(prices, window=window)
         csi = self.compute_csi(returns)
-        csi2 = self.rolling_cross_csi_zscore(csi)
+        
+        csi2 = self.rolling_cross_csi_zscore(csi, window=window2)
         ranks =csi2.rank(axis=1, ascending=True, method='min')
 
         for pair in prices.columns:
             ccy1, ccy2 = pair[:3], pair[3:]
 
             spread = csi2[ccy1] - csi2[ccy2]
-            zspread = self.rolling_zscore(spread, window=window)
 
-            entry1, exit1 = self.get_threshold_crosses(zspread, threshold=2)
-            entry2, exit2 = self.get_threshold_crosses(spread, threshold=2)
+            if 'zspread' in method:
+                zspread = self.rolling_zscore(spread, window=window)
+                entry1, exit1 = self.get_threshold_crosses(zspread, train_ratio=train_ratio, threshold=2, test_only=test_only)
+                if entry1 is not None:
 
-            for o1, o2 in zip(entry1, exit1):
-                direction = -1 if zspread.loc[o1] > 0 else 1
-                out.append({
-                    'year' : o1[:4],
-                    'ccy': pair,
-                    'entry_idx': o1,
-                    'exit_idx': o2,
-                    'entry_price': float(prices.loc[o1, pair]),
-                    'exit_price': float(prices.loc[o2, pair]),
-                    'spread': zspread.loc[o1],
-                    'ccy1_rank': int(ranks.loc[o1, ccy1]),
-                    'ccy2_rank': int(ranks.loc[o1, ccy2]),
-                    'method': 'zspread',
-                    'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
-                })
+                    for o1, o2 in zip(entry1, exit1):
+                        direction = -1 if zspread.loc[o1] > 0 else 1
+                        out.append({
+                            'year' : o1[:4],
+                            'ccy': pair,
+                            'entry_idx': o1,
+                            'exit_idx': o2,
+                            'entry_price': float(prices.loc[o1, pair]),
+                            'exit_price': float(prices.loc[o2, pair]),
+                            'spread': zspread.loc[o1],
+                            'ccy1_rank': int(ranks.loc[o1, ccy1]),
+                            'ccy2_rank': int(ranks.loc[o1, ccy2]),
+                            'method': 'zspread',
+                            'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
+                        })
 
-            for o1, o2 in zip(entry2, exit2):
-                direction = -1 if zspread.loc[o1] > 0 else 1
-                out.append({
-                    'year' : o1[:4],
-                    'ccy': pair,
-                    'entry_idx': o1,
-                    'exit_idx': o2,
-                    'entry_price': float(prices.loc[o1, pair]),
-                    'exit_price': float(prices.loc[o2, pair]),
-                    'spread': spread.loc[o1],
-                    'ccy1_rank': int(ranks.loc[o1, ccy1]),
-                    'ccy2_rank': int(ranks.loc[o1, ccy2]),
-                    'method': 'spread',
-                    'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
-                })
+            if 'spread' in method:
+                entry2, exit2 = self.get_threshold_crosses(spread, train_ratio=train_ratio, threshold=2, test_only=test_only)
+                if entry2 is not None:
+                    for o1, o2 in zip(entry2, exit2):
+                        direction = -1 if spread.loc[o1] > 0 else 1
+                        out.append({
+                            'year' : o1[:4],
+                            'ccy': pair,
+                            'entry_idx': o1,
+                            'exit_idx': o2,
+                            'entry_price': float(prices.loc[o1, pair]),
+                            'exit_price': float(prices.loc[o2, pair]),
+                            'spread': spread.loc[o1],
+                            'ccy1_rank': int(ranks.loc[o1, ccy1]),
+                            'ccy2_rank': int(ranks.loc[o1, ccy2]),
+                            'method': 'spread',
+                            'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
+                        })
 
         return pd.DataFrame(out)
+        # return pd.DataFrame(out, columns=['year', 'ccy', 'entry_idx', 'exit_idx', 'entry_price', 'exit_price', 'spread', 'ccy1_rank', 'ccy2_rank', 'method', 'return'])
 
-    def get_threshold_crosses(self, df: pd.Series, threshold=2.0, reset_level=0.0):
+    def get_threshold_crosses(self, df: pd.Series, train_ratio=0.7, threshold=2.0, reset_level=0.0, test_only=False):
         """
         Detects points where df crosses threshold and resets after returning to reset_level.
         
@@ -154,8 +194,11 @@ class CCY_STR:
         entries = []
         exits = []
         active = False  # whether we're inside a "position"
-        scaled_df = HELPER.get_scaled(df)[0]
-
+        scaled_df = HELPER.get_scaled(df, train_ratio=train_ratio, test_only=test_only)
+        if scaled_df is None:
+            return None, None
+        
+        scaled_df = scaled_df[0]
         for i in range(1, len(scaled_df)):
             val = scaled_df.iloc[i]
             prev = scaled_df.iloc[i - 1]
@@ -187,7 +230,6 @@ if __name__ == '__main__':
     csi2 = csi[csi.index > dt]
     prices2 = prices[prices.index > dt].copy()
     if not pair in prices2.columns:
-        # pair = pair[3:] + pair[:3]
         prices2[pair] = 1/ prices2[pair[3:] + pair[:3]]
         
     spread = csi2[pair[:3]] -csi2[pair[3:]]
