@@ -3,6 +3,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+from enum import Enum
+
+class SCALE(Enum):
+    NO_SCALE = 0
+    SCALE = 1
+    OTHER = 2
 
 class HELPER:
 
@@ -139,17 +145,51 @@ class HELPER:
 
     
     @classmethod
-    def plot_chart(cls, f1: pd.DataFrame, f2: pd.DataFrame=None, scale=False,
-                   hline=None, title=None, train_ratio=0.7):
-        """ plot chart
+    def plot_chart(cls, f1: pd.DataFrame, f2: pd.DataFrame=None, scale: SCALE= SCALE.NO_SCALE,
+                   hline=None, title=None, train_ratio=0.7, window=(0,None)):
+        """
+        Plot a comparative chart of two datasets using dual y-axes, with optional scaling and horizontal reference lines.
+
+        This function visualizes the primary data (`f1`) on the left y-axis and optionally plots a secondary data (`f2`)
+        on the right y-axis. The secondary data can be scaled using a Standard Scaler or visualized as is. Additionally,
+        horizontal lines can be plotted for reference, either using fixed values or scaled mean and standard deviation.
 
         Args:
-            f1 (pd.DataFrame): this is to be plotted on axes 1
-            f2 (pd.DataFrame): this is to be plotted on axes 2
-            scale: apply standard scaler for f2
-            hline: if scale, show hline on chart, else show mean +- 2 * std in chart
-            title: Chart title
-            train_ratio: use in scale, ignore if scale is False
+            f1 (pd.DataFrame): 
+                Primary data to be plotted on the left y-axis. This is often the actual observed data.
+            f2 (pd.DataFrame, optional): 
+                Secondary data to be plotted on the right y-axis. This can be modeled data or a spread. Defaults to None.
+            scale (SCALE, optional): 
+                Scaling option for `f2`. Supports:
+                - SCALE.NO_SCALE: Plot without scaling.
+                - SCALE.SCALE: Apply standard scaling using the training ratio.
+                - SCALE.OTHER: Plot using mean and standard deviation with a ±2 std reference line.
+                Defaults to SCALE.NO_SCALE.
+            hline (float, optional): 
+                A horizontal reference line at `±hline`. If `SCALE.OTHER` is used, it will plot using ±2 std deviations
+                from the mean. Defaults to None.
+            title (str, optional): 
+                Chart title. Defaults to None.
+            train_ratio (float, optional): 
+                Ratio used for splitting the data into training and testing when scaling is applied. 
+                Only applicable when `scale=SCALE.SCALE` or `SCALE.OTHER`. Defaults to 0.7.
+            window (tuple, optional): 
+                A tuple specifying the range of data to visualize using start and end indices `(start, end)`. 
+                Use `(0, None)` to display the entire dataset. Defaults to (0, None).
+        
+        Behavior:
+            - `f1` is plotted on the primary y-axis using a solid line.
+            - If `f2` is provided, it is plotted on a secondary y-axis using a dashed line (`:`).
+            - Horizontal lines are drawn using the specified `hline` or using ±2 standard deviations if scaled with `SCALE.OTHER`.
+            - A legend is displayed on the right side of the figure.
+
+        Example:
+            >>> HELPER.plot_chart(f1=data1, f2=data2, scale=SCALE.SCALE, hline=2, title="Comparison Chart")
+
+        Notes:
+            - Ensure `f1` and `f2` have the same time index for meaningful comparisons.
+            - For SCALE.OTHER, mean and standard deviation are calculated using the training data.
+
         """
         f1_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink']
         f2_colors = ['gray', 'tab:olive', 'tab:cyan', 'tab:gray', 'black', 'magenta', 'gold']
@@ -158,7 +198,7 @@ class HELPER:
         # Plot actual and modeled oil prices on the primary y-axis
         color = 'tab:blue'
         ax1.set_xlabel('Date')
-        f1.plot(ax=ax1, legend=False, color=f1_colors)
+        f1.iloc[window[0]: window[-1]].plot(ax=ax1, legend=False, color=f1_colors)
         ax1.tick_params(axis='y', labelcolor=color)
 
         if f2 is not None:
@@ -167,21 +207,27 @@ class HELPER:
             ax2 = ax1.twinx()
             color = 'tab:green'
             ax2.set_ylabel('spread', color=color) 
-            if scale:
+            if scale == SCALE.SCALE:
                 df_scaled = cls.get_scaled(f2, train_ratio=train_ratio)
                 df_scaled.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
-                if hline is not None:
+
+            else:
+                f2.iloc[window[0]: window[-1]].plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
+                
+            if hline is not None:
+                if scale == SCALE.SCALE:
                     ax2.axhline(-hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
                     ax2.axhline(hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
-            else:
-                f2.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
-                
-                if hline is not None:
+                    
+                elif scale == SCALE.OTHER:
                     mean, std = cls.get_scaled_mean_std(f2, train_ratio=train_ratio)
                     if mean is not None and std is not None:
                         ax2.axhline(mean-2*std, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
                         ax2.axhline(mean, color='gray', linewidth=0.6, linestyle='--')  # Adding a horizontal line at y=hline
                         ax2.axhline(mean+2*std, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
+                elif scale ==  SCALE.NO_SCALE:
+                    ax2.axhline(-hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+                    ax2.axhline(hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
 
             ax2.tick_params(axis='y', labelcolor=color)
 
@@ -189,3 +235,67 @@ class HELPER:
         if title:
             plt.title(title)
         plt.show()
+
+    @classmethod
+    def plot_pivot(cls, df, index, value, column, batches=1):
+        """
+        Plot a line graph of specified values over a given index, 
+        grouped by a specified column, with optional batching for clearer visualization.
+
+        This function is useful for visualizing how a particular metric (e.g., standard deviation)
+        evolves over a range of windows or other time-series indices, for different categories
+        (e.g., currencies). The data is plotted in separate figures with a clear, non-overlapping legend.
+
+        Args:
+            df (pd.DataFrame): 
+                Input DataFrame containing the data to plot. 
+                It must contain the specified index, value, and column.
+            index (str, optional): 
+                The column name to use for the x-axis (e.g., 'window'). 
+                Defaults to 'window'.
+            value (str, optional): 
+                The column name representing the values to plot on the y-axis (e.g., 'std'). 
+                Defaults to 'std'.
+            column (str, optional): 
+                The column representing different categories or groups (e.g., 'ccy'). 
+                Defaults to 'ccy'.
+            batches (int, optional): 
+                The number of batches to split the unique categories into. 
+                Useful for reducing clutter in the plots. 
+                Defaults to 1, meaning no batching.
+
+        Example:
+            >>> plot_pivot(df, index='window', value='std', column='ccy', batches=3)
+            This will plot the standard deviation ('std') over different windows,
+            with currencies ('ccy') divided into 3 batches for better readability.
+
+        Notes:
+            - The function automatically splits the categories into the specified number of batches using `numpy.array_split()`.
+            - Each batch is plotted in a separate figure.
+            - The legend for each figure is displayed outside the plot to avoid overlapping.
+        """
+        unique_ccys = df[column].unique()
+        batches = np.array_split(unique_ccys, batches)
+
+        for i, batch in enumerate(batches):
+            fig, ax = plt.subplots(figsize=(13, 4))
+            all_lines = []
+            all_labels = []
+
+            for ccy in batch:
+                subset = df[df[column] == ccy]
+                line, = ax.plot(subset[index], subset[value], label=ccy)
+                all_lines.append(line)
+                all_labels.append(ccy)
+
+            ax.set_xlabel(index)
+            ax.set_ylabel(value)
+            ax.set_title(f'{value} Over Different Windows - Batch {i+1}')
+            ax.grid(True)
+
+            # Add a consolidated legend outside the plot
+            fig.legend(all_lines, all_labels, loc="upper left", bbox_to_anchor=(1.02, 1), bbox_transform=ax.transAxes)
+            plt.tight_layout(rect=[0, 0, 0.85, 1])
+
+        plt.show()
+

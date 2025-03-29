@@ -5,15 +5,16 @@ from  src.csv.fred  import FRED
 import matplotlib.pyplot as plt
 import itertools
 from sklearn.preprocessing import StandardScaler
-from src.pattern.helper import HELPER
+from src.pattern.helper import HELPER, SCALE
 from tqdm import tqdm
 from src.csv.cache import CACHE
 
 CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR']
+FR = FRED() # declare only once
 
 class CCY_STR:
     def __init__(self):
-        self.fr = FRED()
+        self.fr = FR
         self.get_all_pairs()
         self.cache = CACHE('ccy_str.cache')
         self.pnl_cache = self.cache.get_pickle() or {}
@@ -78,13 +79,26 @@ class CCY_STR:
         # 1. Per-currency Z-score (Rolling z-score for each currency individually)
         return df.apply(lambda col: self.rolling_zscore(col, window=window))
 
-    def rolling_cross_csi_zscore(self, df: pd.DataFrame, window: int = 60) -> pd.DataFrame:
+    def rolling_cross_csi_zscore(self, window:int =60, window2: int = None) -> pd.DataFrame:
         # 2. Cross-currency Z-score (Rolling z-score using mean/std across all currencies)
+        """
+        """
         """Compute rolling z-score for each currency using window-wide mean/std across all currencies."""
+        if window2 is None:
+            window2 = window
+
+        cache_key = ('rolling_cross_csi_zscore', window, window2)
+        if cache_key in self.pnl_cache:
+            return self.pnl_cache[cache_key]
+        
+        prices = self.get_all_pairs()
+        returns = self.compute_strength(prices, window=window)
+        df = self.compute_csi(returns)
+        
         zscore_df = pd.DataFrame(index=df.index, columns=df.columns)
 
-        for i in range(window - 1, len(df)):
-            window_df = df.iloc[i - window + 1 : i + 1]
+        for i in range(window2 - 1, len(df)):
+            window_df = df.iloc[i - window2 + 1 : i + 1]
             
             global_mean = window_df.values.flatten().mean()
             global_std = window_df.values.flatten().std()
@@ -95,6 +109,8 @@ class CCY_STR:
             else:
                 zscore_df.iloc[i] = (df.iloc[i] - global_mean) / global_std
 
+        self.pnl_cache[cache_key] = zscore_df  # Cache the result
+        self.cache.set_pickle(self.pnl_cache)
         return zscore_df
     
     def compare_pnl(self, train_ratio, method=['spread']):
@@ -106,11 +122,11 @@ class CCY_STR:
         out = []
         idx = []
         for window in tqdm(range(10, 700, 10)):
-            df = self.get_pnl(window, train_ratio=train_ratio, method=method)
+            df = self.get_pnl_all(window, train_ratio=train_ratio, method=method)
             if df.empty:
                 break
 
-            df2 = self.get_pnl(window, train_ratio=train_ratio, method=method, test_only=True)
+            df2 = self.get_pnl_all(window, train_ratio=train_ratio, method=method, test_only=True)
             if df2.empty:
                 break
             
@@ -146,9 +162,7 @@ class CCY_STR:
         out = []
         prices = self.get_all_pairs()
         for window in tqdm(range(10, 700, 10)):
-            returns = self.compute_strength(prices, window=window)
-            csi = self.compute_csi(returns)
-            csi2 = self.rolling_cross_csi_zscore(csi, window=window)
+            csi2 = self.rolling_cross_csi_zscore(window=window, window2=window)
 
             for pair in prices.columns:
                 ccy1, ccy2 = pair[:3], pair[3:]
@@ -170,8 +184,8 @@ class CCY_STR:
         self.cache.set_pickle(self.pnl_cache)
         return df_result
     
-    def get_pnl(self, window=200, window2=None, train_ratio=0.7, method=['spread'], test_only=False) -> pd.DataFrame:
-        """This generates PnL
+    def get_pnl_all(self, window=200, window2=None, train_ratio=0.7, method=['spread'], test_only=False) -> pd.DataFrame:
+        """This generates PnL for all ccy
 
         Args:
             window (int, optional): window used for compute strength. Defaults to 200.
@@ -194,9 +208,7 @@ class CCY_STR:
 
         out = []
         prices = self.get_all_pairs()
-        returns = self.compute_strength(prices, window=window)
-        csi = self.compute_csi(returns)
-        csi2 = self.rolling_cross_csi_zscore(csi, window=window2)
+        csi2 = self.rolling_cross_csi_zscore(window=window, window2=window2)
         ranks = csi2.rank(axis=1, ascending=True, method='min')
 
         for pair in prices.columns:
@@ -284,7 +296,117 @@ class CCY_STR:
 
         return entries, exits
 
+    def get_spread(self, pair: str, window: int, window2: int=None, visualize=False):
+        """This return rolling csi spread for selected ccy
 
+        Args:
+            pair (str): Selected currency pair
+            window (int): used in csi calculation
+            window2 (int): used in rolling csi calculation
+        """
+        if window2 is None:
+            window2 = window
+        prices = self.get_all_pairs()
+        csi2 = self.rolling_cross_csi_zscore(window=window, window2=window2)
+        ccy1, ccy2 = pair[:3], pair[3:]
+
+        if not pair in prices.columns:
+            prices[pair] = 1/ prices[pair[3:] + pair[:3]]
+
+        spread = csi2[ccy1] - csi2[ccy2]
+        if visualize:
+            print(HELPER.get_scaled_mean_std(spread))
+            HELPER.plot_chart(prices[pair], spread, scale=SCALE.OTHER, hline=2)  # Choose what to plot
+        return spread
+
+class CCY_STR_DEBUG(CCY_STR):
+    def __init__(self, pair: str, window: int, window2: int=None, train_ratio=0.7):
+        super().__init__()
+        self.pair = pair
+        self.window =  window
+        if window2 is None:
+            window2 = window
+        self.window2 = window2
+        self.train_ratio = train_ratio
+        self.prices = self.get_all_pairs()
+
+    def debug_spread(self):
+        self.get_spread(self.pair, self.window, self.window2, visualize=True)
+
+    def debug_pair(self, dt1, dt2, extra_window=0, scale=SCALE.OTHER):
+        """
+        Debug and visualize the spread between two currencies over a specified time range.
+
+        This function extracts and plots the spread for the given currency pair within 
+        the specified date range, along with its scaled version using a Standard Scaler. 
+        It can include additional data before and after the range using `extra_window` for context.
+
+        Args:
+            dt1 (str, optional): 
+                Start date for the plot in 'YYYY-MM-DD' format. 
+            dt2 (str, optional): 
+                End date for the plot in 'YYYY-MM-DD' format. 
+            extra_window (int, optional): 
+                Number of additional data points to include before and after the specified date range 
+                for better context. Defaults to 0.
+
+        Behavior:
+            - Fetches the spread using `get_spread()` for the specified currency pair and windows.
+            - Extracts the range between `dt1` and `dt2` with optional extra data using `extra_window`.
+            - Applies scaling using `HELPER.get_scaled()` to plot the normalized spread.
+            - Visualizes the actual and scaled spreads using `HELPER.plot_chart()` with an optional threshold line at ±2.
+
+        Example:
+            >>> self.debug_pair(dt1='2000-01-01', dt2='2000-06-01', extra_window=10)
+
+        """
+        spread = self.get_spread(self.pair, self.window, self.window2)
+        pos1 = spread.index.get_loc(dt1) - extra_window
+        pos2 = spread.index.get_loc(dt2) + extra_window
+        HELPER.plot_chart(self.prices[self.pair], spread, scale=scale, hline=2, train_ratio=self.train_ratio, window=(pos1, pos2) )  
+
+    def debug_pair_v2(self, idx: int, extra_window: int=0, scale:SCALE=SCALE.OTHER):
+        """        
+        Debug and visualize the spread between two currencies over a specified time range by index of pnl_all
+
+        Args:
+            idx (int): index in get_pnl_all
+            extra_window (int, optional): add extra window before and after chart . Defaults to 0.
+            scale (SCALE, optional): see plot_chart SCALE description. Defaults to SCALE.OTHER.
+        """
+        
+        spread = self.get_spread(self.pair, self.window, self.window2)
+        pnl = self.get_pnl_all(window=self.window, window2=self.window2, train_ratio=self.train_ratio)
+
+        inverse = False
+        pair = self.pair
+        if self.pair not in pnl.ccy.unique():
+            inverse = True
+            pair = self.pair[3:] + self.pair[:3]
+
+        if self.pair not in self.prices:
+            self.prices[self.pair] = 1/self.prices[pair]
+        
+        pnl2 = pnl[pnl.ccy==pair].copy() 
+
+        assert idx < pnl2.shape[0], "Max idx is %s" % pnl2.shape[0]
+
+        dt1 = pnl2.iloc[idx].entry_idx
+        dt2 = pnl2.iloc[idx].exit_idx
+        pos1 = spread.index.get_loc(dt1) - extra_window
+        pos2 = spread.index.get_loc(dt2) + 1+ extra_window
+        
+        if inverse:
+            pnl2['ccy'] =  self.pair
+            pnl2['entry_price'] =  1/pnl2['entry_price']
+            pnl2['exit_price'] =  1/pnl2['exit_price']
+            pnl2['spread']  = - pnl2['spread']
+            ccy_rank = pnl2['ccy1_rank']
+            pnl2['ccy1_rank']  = pnl2['ccy2_rank']
+            pnl2['ccy2_rank'] = ccy_rank
+            
+        print(pnl2.iloc[idx])
+        HELPER.plot_chart(self.prices[self.pair], spread, scale=scale, hline=2, train_ratio=self.train_ratio, window=(pos1, pos2) )  
 
 if __name__ == '__main__':
     c = CCY_STR()
