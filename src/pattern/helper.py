@@ -65,6 +65,38 @@ class HELPER:
         return optimal_threshold
     
     @staticmethod
+    def get_scaled_mean_std(df: pd.DataFrame, train_ratio=0.7):
+        """
+        Extract the mean and standard deviation using a StandardScaler from a portion of the data.
+
+        Args:
+            df (pd.Series): The time series data.
+            train_ratio (float): Ratio of data to use for training (default 0.7).
+            test_only (bool): Whether to use only the test data.
+
+        Returns:
+            tuple: (mean, std) of the selected portion of the data.
+        """
+        if isinstance(df, pd.Series):
+            df = df.to_frame()
+
+        if df.empty:
+            return None, None
+
+        split_idx = int(len(df) * train_ratio)
+        train_df = df.iloc[:split_idx]
+        if train_df.notnull().sum().sum() < 1000:
+            return None, None
+
+        scaler = StandardScaler()
+        _ = scaler.fit_transform(train_df)
+
+        mean = scaler.mean_[0]
+        std = np.sqrt(scaler.var_[0])
+
+        return mean, std
+
+    @staticmethod
     def get_scaled(df: pd.DataFrame, train_ratio: float = 0.8, test_only=False) -> pd.DataFrame:
         """
         Scale a DataFrame using StandardScaler fit on training data only.
@@ -108,13 +140,16 @@ class HELPER:
     
     @classmethod
     def plot_chart(cls, f1: pd.DataFrame, f2: pd.DataFrame=None, scale=False,
-                   hline=None, title=None):
+                   hline=None, title=None, train_ratio=0.7):
         """ plot chart
 
         Args:
             f1 (pd.DataFrame): this is to be plotted on axes 1
             f2 (pd.DataFrame): this is to be plotted on axes 2
             scale: apply standard scaler for f2
+            hline: if scale, show hline on chart, else show mean +- 2 * std in chart
+            title: Chart title
+            train_ratio: use in scale, ignore if scale is False
         """
         f1_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple', 'tab:brown', 'tab:pink']
         f2_colors = ['gray', 'tab:olive', 'tab:cyan', 'tab:gray', 'black', 'magenta', 'gold']
@@ -133,18 +168,22 @@ class HELPER:
             color = 'tab:green'
             ax2.set_ylabel('spread', color=color) 
             if scale:
-                df_scaled = cls.get_scaled(f2)
+                df_scaled = cls.get_scaled(f2, train_ratio=train_ratio)
                 df_scaled.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
-                ax2.axhline(-2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
-                ax2.axhline(2, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+                if hline is not None:
+                    ax2.axhline(-hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
+                    ax2.axhline(hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
             else:
                 f2.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
-            if hline:
-                ax2.axhline(-hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
-                ax2.axhline(hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
+                
+                if hline is not None:
+                    mean, std = cls.get_scaled_mean_std(f2, train_ratio=train_ratio)
+                    if mean is not None and std is not None:
+                        ax2.axhline(mean-2*std, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
+                        ax2.axhline(mean, color='gray', linewidth=0.6, linestyle='--')  # Adding a horizontal line at y=hline
+                        ax2.axhline(mean+2*std, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=hline
 
             ax2.tick_params(axis='y', labelcolor=color)
-            ax2.axhline(0, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
 
         fig.legend(loc="upper left", bbox_to_anchor=(1.02,1), bbox_transform=ax1.transAxes)
         if title:
