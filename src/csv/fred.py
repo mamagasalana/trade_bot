@@ -2,6 +2,8 @@ from finagg.fred.api import CategorySeries, SeriesObservations,SeriesCategories,
 import datetime
 import pandas as pd
 import os
+from src.csv.lbma import LBMA
+import logging
 
 FRED_MAP = {
  'AUD' : 32269,
@@ -29,6 +31,18 @@ CCY_MAP = {
     'DEXUSUK' : 'GBPUSD',
 }
 
+COMMODITY_MAP = { 
+    'DCOILWTICO' : 'OILUSD',
+    'DHHNGSP' : 'GASUSD',
+}
+
+LBMA_MAP = {
+    'gold' : 'XAUUSD',
+    'silver': 'XAGUSD',
+    'palladium': 'XPDUSD',
+    'platinum' : 'XPTUSD' 
+}
+
 class FRED:
     def __init__(self, end_year=2024, start_year=2009):
         self.start_year = start_year
@@ -47,7 +61,7 @@ class FRED:
         If it's quoted as 'USDCUR', we return the reciprocal.
         """
         if self.usd_ccy_list is None:
-            self.usd_ccy_list = self.get_ccy()
+            self.usd_ccy_list = self.get_all()
         # If the currency is already USD, then 1 USD = 1.
         if currency == 'USD':
             return 1
@@ -67,7 +81,7 @@ class FRED:
         get pairs from fred, manually generate exotic pairs 
         """
         if self.usd_ccy_list is None:
-            self.usd_ccy_list = self.get_ccy()
+            self.usd_ccy_list = self.get_all()
             
         for pair in pairs:
             # If the pair is already present, skip it.
@@ -84,8 +98,38 @@ class FRED:
 
             # Add the new exotic pair column to your DataFrame
             self.usd_ccy_list[pair] = exotic_rate
-            print(f"Generated exotic pair {pair}.")
+            logging.debug(f"Generated exotic pair {pair}.")
         return self.usd_ccy_list[pairs].dropna()
+    
+    def get_all(self) -> pd.DataFrame:
+        """Customize your pairs here
+
+        Returns:
+            pd.DataFrame: return combined pairs
+        """
+        df1 = self.get_ccy()
+        df2 = self.get_commodity()
+        df3 = LBMA().get_all()
+        df3 = df3.drop(columns=[col for col in df3.columns if '_pm' in col])
+        df3.columns = [LBMA_MAP[col.split('_')[0]] for col in df3.columns]
+        
+        df = df1.merge(df2, how='outer', right_index=True, left_index=True)
+        df = df.merge(df3, how='outer', right_index=True, left_index=True )
+        df.dropna(inplace=True)
+        df[df < 0] = 0.0001
+        return df
+
+
+
+    def get_commodity(self):
+        self.ccy = 'commodity'
+        self.start_year = 1970
+        # web cache only last for 1 week , is it good to store locally to avoid spamming fred
+        if os.path.exists(self.filename):
+            df= pd.read_csv(self.filename).pivot(index='datetime', columns='event', values='actual' )
+            return df.rename(columns=COMMODITY_MAP)
+        df= self.get_event_by_ids(COMMODITY_MAP.keys())
+        return df.pivot(index='datetime', columns='event', values='actual').rename(columns=COMMODITY_MAP)   
     
     def get_ccy(self):
         self.ccy = 'ccy'
@@ -172,4 +216,5 @@ class FRED:
 
 if __name__ =='__main__':
     a = FRED()
-    a.get_ccy()
+    df = a.get_all()
+    print('debug')

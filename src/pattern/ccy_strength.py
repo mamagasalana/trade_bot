@@ -9,15 +9,38 @@ from src.pattern.helper import HELPER, SCALE
 from tqdm import tqdm
 from src.csv.cache import CACHE
 
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD', 'XPT']
+CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'GAS', 'XPD', 'XPT']
+CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
 FR = FRED() # declare only once
+
+def before_exit(func):
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        finally:
+            self.save_cache()
+    return wrapper
+
 
 class CCY_STR:
     def __init__(self):
         self.fr = FR
         self.get_all_pairs()
         self.cache = CACHE('ccy_str.cache')
-        self.pnl_cache = self.cache.get_pickle() or {}
+        self.full_pnl_cache = self.cache.get_pickle() or {}
+        self.current_key = tuple(sorted(CURRENCIES))
+        if not self.current_key in self.full_pnl_cache:
+            self.full_pnl_cache[self.current_key] = {}
+        # If the z-score exceeds a certain threshold (e.g., ±5), it can be capped to prevent extreme spikes from distorting your PnL.
+        self.cap_threshold = 5 
+
+    @property
+    def pnl_cache(self):
+        return self.full_pnl_cache[self.current_key]
+    
+    def save_cache(self):
+        self.cache.set_pickle(self.full_pnl_cache)
 
     def get_all_pairs(self) -> pd.DataFrame:
         """Compute currency strength index using USD as anchor."""
@@ -107,45 +130,51 @@ class CCY_STR:
                 print('nan')
                 zscore_df.iloc[i] = np.nan
             else:
-                zscore_df.iloc[i] = (df.iloc[i] - global_mean) / global_std
+                zscores = (df.iloc[i] - global_mean) / global_std
+                zscore_df.iloc[i] = np.clip(zscores, -self.cap_threshold, self.cap_threshold)
 
         self.pnl_cache[cache_key] = zscore_df  # Cache the result
-        self.cache.set_pickle(self.pnl_cache)
         return zscore_df
     
+    @before_exit
     def compare_pnl(self, train_ratio, method=['spread']):
-        key = ''.join([str(train_ratio)] + sorted(method))
+        cache_key = ''.join([str(train_ratio)] + sorted(method))
 
         def weighted_mean(x):
             return x[('return', 'sum')].sum() / x[('return', 'count')].sum()
         
-        out = []
-        idx = []
-        for window in tqdm(range(10, 700, 10)):
-            df = self.get_pnl_all(window, train_ratio=train_ratio, method=method)
-            if df.empty:
-                break
+        if not cache_key in self.pnl_cache:
+            out = []
+            idx = []
+            for window in tqdm(range(10, 700, 10)):
+                df = self.get_pnl_all(window, train_ratio=train_ratio, method=method)
+                if df.empty:
+                    break
 
-            df2 = self.get_pnl_all(window, train_ratio=train_ratio, method=method, test_only=True)
-            if df2.empty:
-                break
-            
-            idx.append(window)
-            # Calculate sum of returns and count for weighted mean
-            xx = df.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
-            xx2 = df2.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
+                df2 = self.get_pnl_all(window, train_ratio=train_ratio, method=method, test_only=True)
+                if df2.empty:
+                    break
+                
+                idx.append(window)
+                # Calculate sum of returns and count for weighted mean
+                xx = df.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
+                xx2 = df2.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
 
-            # Calculate weighted mean: sum of returns / total count
-            full_means = [weighted_mean(xx.xs(key=m, level=1)) for m in method]
-            test_means = [weighted_mean(xx2.xs(key=m, level=1)) for m in method]
+                # Calculate weighted mean: sum of returns / total count
+                full_means = [weighted_mean(xx.xs(key=m, level=1)) for m in method]
+                test_means = [weighted_mean(xx2.xs(key=m, level=1)) for m in method]
 
-            out.append(full_means + test_means)
+                out.append(full_means + test_means)
 
-        columns = ['full_%s' % m for m in method] + ['test_%s' % m for m in method]
-        dfout = pd.DataFrame(out, columns=columns, index=idx)
-        HELPER.plot_chart(dfout, title=key)
+            columns = ['full_%s' % m for m in method] + ['test_%s' % m for m in method]
+            dfout = pd.DataFrame(out, columns=columns, index=idx)
+            self.pnl_cache[cache_key] = dfout
+        else:
+            dfout = self.pnl_cache[cache_key]
+        HELPER.plot_chart(dfout, title=cache_key)
         return dfout
 
+    @before_exit
     def get_scaled_params(self, train_ratio=0.7) -> pd.DataFrame:
         """This generates mean and standard deviation of the Standard Scaler
 
@@ -181,9 +210,9 @@ class CCY_STR:
                 
         df_result = pd.DataFrame(out)
         self.pnl_cache[cache_key] = df_result  # Cache the result
-        self.cache.set_pickle(self.pnl_cache)
         return df_result
     
+    @before_exit
     def get_pnl_all(self, window=200, window2=None, train_ratio=0.7, method=['spread'], test_only=False) -> pd.DataFrame:
         """This generates PnL for all ccy
 
@@ -257,7 +286,6 @@ class CCY_STR:
 
         df_result = pd.DataFrame(out)
         self.pnl_cache[cache_key] = df_result  # Cache the result
-        self.cache.set_pickle(self.pnl_cache)
         return df_result
 
         # return pd.DataFrame(out, columns=['year', 'ccy', 'entry_idx', 'exit_idx', 'entry_price', 'exit_price', 'spread', 'ccy1_rank', 'ccy2_rank', 'method', 'return'])
@@ -407,7 +435,8 @@ class CCY_STR_DEBUG(CCY_STR):
             
         print(pnl2.iloc[idx])
         HELPER.plot_chart(self.prices[self.pair], spread, scale=scale, hline=2, train_ratio=self.train_ratio, window=(pos1, pos2) )  
-
+        return pnl2
+    
 if __name__ == '__main__':
     c = CCY_STR()
     prices = c.get_all_pairs()  

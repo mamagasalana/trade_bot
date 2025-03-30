@@ -16,3 +16,5 @@ arch
 tensorflow
 tensorflow-probability
 tensorflow-probability[tf]
+nasdaq-data-link
+python-dotenv
