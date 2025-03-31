@@ -35,6 +35,7 @@ CCY_MAP = {
 COMMODITY_MAP = { 
     'DCOILWTICO' : 'OILUSD',
     'DHHNGSP' : 'GASUSD',
+    'NASDAQCOM' : 'NDQUSD'
 }
 
 LBMA_MAP = {

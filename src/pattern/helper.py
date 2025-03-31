@@ -202,11 +202,15 @@ class HELPER:
         ax1.tick_params(axis='y', labelcolor=color)
 
         if f2 is not None:
-        # Create a second y-axis 
-
+            # Create a second y-axis 
             ax2 = ax1.twinx()
             color = 'tab:green'
             ax2.set_ylabel('spread', color=color) 
+           # Add a vertical line for the train-test split
+            split_index = int(len(f2) * train_ratio)
+            split_date = f2.index[split_index]
+            ax2.axvline(split_index, color='red', linestyle='--', linewidth=1.2, label='Train-Test Split')
+            
             if scale == SCALE.SCALE:
                 df_scaled = cls.get_scaled(f2, train_ratio=train_ratio)
                 df_scaled.plot( color=f2_colors, ax=ax2, legend=False, linestyle=':')
@@ -229,6 +233,12 @@ class HELPER:
                     ax2.axhline(-hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
                     ax2.axhline(hline, color='gray', linewidth=0.8, linestyle='--')  # Adding a horizontal line at y=0
 
+            ax2.text(split_index, ax2.get_ylim()[0], 
+                    f'{split_date}', 
+                    color='red', 
+                    fontsize=10, 
+                    ha='center', 
+                    va='bottom')
             ax2.tick_params(axis='y', labelcolor=color)
 
         fig.legend(loc="upper left", bbox_to_anchor=(1.02,1), bbox_transform=ax1.transAxes)

@@ -12,6 +12,7 @@ from src.csv.cache import CACHE
 CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD', 'XPT']
 CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD']
 CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']
+CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'NDQ']
 # CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'GAS', 'XPD', 'XPT']
 # CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
 FR = FRED() # declare only once
@@ -326,7 +327,7 @@ class CCY_STR:
 
         return entries, exits
 
-    def get_spread(self, pair: str, window: int, window2: int=None, visualize=False):
+    def get_spread(self, pair: str, window: int, window2: int=None, train_ratio=0.7, visualize=False):
         """This return rolling csi spread for selected ccy
 
         Args:
@@ -345,8 +346,8 @@ class CCY_STR:
 
         spread = csi2[ccy1] - csi2[ccy2]
         if visualize:
-            print(HELPER.get_scaled_mean_std(spread))
-            HELPER.plot_chart(prices[pair], spread, scale=SCALE.OTHER, hline=2)  # Choose what to plot
+            print(HELPER.get_scaled_mean_std(spread, train_ratio=train_ratio))
+            HELPER.plot_chart(prices[pair], spread, scale=SCALE.OTHER, hline=2, train_ratio=train_ratio)  # Choose what to plot
         return spread
 
 class CCY_STR_DEBUG(CCY_STR):
@@ -361,7 +362,7 @@ class CCY_STR_DEBUG(CCY_STR):
         self.prices = self.get_all_pairs()
 
     def debug_spread(self):
-        self.get_spread(self.pair, self.window, self.window2, visualize=True)
+        self.get_spread(self.pair, self.window, self.window2, train_ratio=self.train_ratio, visualize=True)
 
     def debug_pair(self, dt1, dt2, extra_window=0, scale=SCALE.OTHER):
         """
@@ -390,7 +391,7 @@ class CCY_STR_DEBUG(CCY_STR):
             >>> self.debug_pair(dt1='2000-01-01', dt2='2000-06-01', extra_window=10)
 
         """
-        spread = self.get_spread(self.pair, self.window, self.window2)
+        spread = self.get_spread(self.pair, self.window, self.window2, train_ratio=self.train_ratio)
         pos1 = spread.index.get_loc(dt1) - extra_window
         pos2 = spread.index.get_loc(dt2) + extra_window
         HELPER.plot_chart(self.prices[self.pair], spread, scale=scale, hline=2, train_ratio=self.train_ratio, window=(pos1, pos2) )  
@@ -405,7 +406,7 @@ class CCY_STR_DEBUG(CCY_STR):
             scale (SCALE, optional): see plot_chart SCALE description. Defaults to SCALE.OTHER.
         """
         
-        spread = self.get_spread(self.pair, self.window, self.window2)
+        spread = self.get_spread(self.pair, self.window, self.window2, train_ratio=self.train_ratio)
         pnl = self.get_pnl_all(window=self.window, window2=self.window2, train_ratio=self.train_ratio)
 
         inverse = False
