@@ -293,6 +293,62 @@ class CCY_STR:
 
         # return pd.DataFrame(out, columns=['year', 'ccy', 'entry_idx', 'exit_idx', 'entry_price', 'exit_price', 'spread', 'ccy1_rank', 'ccy2_rank', 'method', 'return'])
 
+    @before_exit
+    def get_pending_trades_all(self, window=200, window2=None, train_ratio=0.7, method=['spread']) -> pd.DataFrame:
+        """This return pending trades
+
+        Args:
+            window (int, optional): window used for compute strength. Defaults to 200.
+            window2 (_type_, optional): window used for compute rolling csi zscore. Defaults to None. If None is used, it will use window instead.
+            train_ratio (float, optional): train ratio for train-test split. Defaults to 0.7.
+            method (list, optional): Spread and Zspread. Defaults to ['spread'].
+            test_only (bool, optional): To generate PnL for test only. Defaults to False.
+
+        Returns:
+            pd.DataFrame: pending trades dataframe
+        """
+        if not window2:
+            window2 = window
+        
+        # Create a unique cache key based on function parameters
+        cache_key = ("pending", window, window2, train_ratio, tuple(sorted(method)))
+        
+        if cache_key in self.pnl_cache:
+            return self.pnl_cache[cache_key]
+
+        out = []
+        prices = self.get_all_pairs()
+        csi2 = self.rolling_cross_csi_zscore(window=window, window2=window2)
+        ranks = csi2.rank(axis=1, ascending=True, method='min')
+
+        for pair in prices.columns:
+            ccy1, ccy2 = pair[:3], pair[3:]
+            spread = csi2[ccy1] - csi2[ccy2]
+
+            if 'spread' in method:
+                entry2, exit2 = self.get_threshold_crosses(spread, train_ratio=train_ratio, threshold=2)
+                if len(entry2) != len(exit2):
+                    o1 = entry2[-1]
+                    direction = -1 if spread.loc[o1] > 0 else 1
+                    out.append({
+                        'year': o1[:4],
+                        'ccy': pair,
+                        'entry_idx': o1,
+                        'entry_price': float(prices.loc[o1, pair]),
+                        'spread': spread.loc[o1],
+                        'ccy1_rank': int(ranks.loc[o1, ccy1]),
+                        'ccy2_rank': int(ranks.loc[o1, ccy2]),
+                        'method': 'spread',
+                        'direction' : direction
+                    })
+
+        df_result = pd.DataFrame(out)
+        self.pnl_cache[cache_key] = df_result  # Cache the result
+        return df_result
+
+        # return pd.DataFrame(out, columns=['year', 'ccy', 'entry_idx', 'exit_idx', 'entry_price', 'exit_price', 'spread', 'ccy1_rank', 'ccy2_rank', 'method', 'return'])
+
+
     def get_threshold_crosses(self, df: pd.Series, train_ratio=0.7, threshold=2.0, reset_level=0.0, test_only=False):
         """
         Detects points where df crosses threshold and resets after returning to reset_level.
