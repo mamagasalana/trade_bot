@@ -207,7 +207,7 @@ class HELPER:
             color = 'tab:green'
             ax2.set_ylabel('spread', color=color) 
            # Add a vertical line for the train-test split
-            split_index = int(len(f2) * train_ratio)
+            split_index = max(0, int(len(f2) * train_ratio) -1)
             split_date = f2.index[split_index]
             ax2.axvline(split_index, color='red', linestyle='--', linewidth=1.2, label='Train-Test Split')
             
