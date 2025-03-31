@@ -9,9 +9,11 @@ from src.pattern.helper import HELPER, SCALE
 from tqdm import tqdm
 from src.csv.cache import CACHE
 
-# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD', 'XPT']
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'GAS', 'XPD', 'XPT']
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
+CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD', 'XPT']
+CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD']
+CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'GAS', 'XPD', 'XPT']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
 FR = FRED() # declare only once
 
 def before_exit(func):
@@ -33,7 +35,7 @@ class CCY_STR:
         if not self.current_key in self.full_pnl_cache:
             self.full_pnl_cache[self.current_key] = {}
         # If the z-score exceeds a certain threshold (e.g., ±5), it can be capped to prevent extreme spikes from distorting your PnL.
-        self.cap_threshold = 5 
+        self.cap_threshold = 999
 
     @property
     def pnl_cache(self):

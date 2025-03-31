@@ -4,6 +4,7 @@ import pandas as pd
 import os
 from src.csv.lbma import LBMA
 import logging
+import numpy as np
 
 FRED_MAP = {
  'AUD' : 32269,
@@ -115,9 +116,9 @@ class FRED:
         
         df = df1.merge(df2, how='outer', right_index=True, left_index=True)
         df = df.merge(df3, how='outer', right_index=True, left_index=True )
-        df.dropna(inplace=True)
-        df[df < 0] = 0.0001
-        return df
+        # df.dropna(inplace=True)
+        df[df < 0] = np.nan
+        return df.dropna()
 
 
 
