@@ -8,14 +8,17 @@ from sklearn.preprocessing import StandardScaler
 from src.pattern.helper import HELPER, SCALE
 from tqdm import tqdm
 from src.csv.cache import CACHE
+from pykalman import KalmanFilter
+from enum import Enum
+from typing import List
 
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD', 'XPT']
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD']
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']
-CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'NDQ']
-# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'GAS', 'XPD', 'XPT']
-# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
 FR = FRED() # declare only once
+
+class SMOOTHING_METHOD(Enum):
+    NONE = 0
+    KALMAN = 1
+    ROLLING_ZSCORE = 2
+
 
 def before_exit(func):
     def wrapper(self, *args, **kwargs):
@@ -25,14 +28,23 @@ def before_exit(func):
             self.save_cache()
     return wrapper
 
+# Possible combinations
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD', 'XPT']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'XPD']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS', 'NDQ']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'GAS', 'XPD', 'XPT']
+# CURRENCIES = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
+
 
 class CCY_STR:
-    def __init__(self):
+    def __init__(self, ccy=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]):
+        self.CURRENCIES = ccy
         self.fr = FR
         self.get_all_pairs()
         self.cache = CACHE('ccy_str.cache')
         self.full_pnl_cache = self.cache.get_pickle() or {}
-        self.current_key = tuple(sorted(CURRENCIES))
+        self.current_key = tuple(sorted(self.CURRENCIES))
         if not self.current_key in self.full_pnl_cache:
             self.full_pnl_cache[self.current_key] = {}
         # If the z-score exceeds a certain threshold (e.g., ±5), it can be capped to prevent extreme spikes from distorting your PnL.
@@ -47,10 +59,10 @@ class CCY_STR:
 
     def get_all_pairs(self) -> pd.DataFrame:
         """Compute currency strength index using USD as anchor."""
-        # pairs= [ccy+denominated_ccy for ccy in CURRENCIES]
-        pairs = [''.join(x) for x in itertools.combinations(CURRENCIES, 2)]
+        # pairs= [ccy+denominated_ccy for ccy in self.CURRENCIES]
+        pairs = [''.join(x) for x in itertools.combinations(self.CURRENCIES, 2)]
         data = self.fr.get_pairs(pairs)
-        # data.columns = CURRENCIES
+        # data.columns = self.CURRENCIES
         return data
     
     def compute_strength(self, prices: pd.DataFrame, window=20) -> pd.DataFrame:
@@ -58,11 +70,13 @@ class CCY_STR:
         log_ret = np.log(prices / prices.shift(window))
         return log_ret  # already aligned to non-USD currencies
 
-    def compute_csi(self, returns: pd.DataFrame) -> pd.DataFrame:
+    def compute_csi(self, window:int =60) -> pd.DataFrame:
         """Compute currency strength index (CSI) for each currency from pairwise returns."""
-        csi = pd.DataFrame(index=returns.index, columns=CURRENCIES)
+        prices = self.get_all_pairs()
+        returns = self.compute_strength(prices, window=window)
+        csi = pd.DataFrame(index=returns.index, columns=self.CURRENCIES)
 
-        for ccy in CURRENCIES:
+        for ccy in self.CURRENCIES:
             ccy_returns = []
             for pair in returns.columns:
                 base, quote = pair[:3], pair[3:]
@@ -105,6 +119,59 @@ class CCY_STR:
         # 1. Per-currency Z-score (Rolling z-score for each currency individually)
         return df.apply(lambda col: self.rolling_zscore(col, window=window))
 
+    def smoothing_method(self, window: int = 60, window2=None, method: SMOOTHING_METHOD = SMOOTHING_METHOD.ROLLING_ZSCORE):
+        """
+        Return smoothed Currency Strength Index (CSI) using the selected smoothing method.
+
+        Args:
+            window (int, optional): Window size used for smoothing or CSI computation. Defaults to 60.
+            window2 (int, optional): only use in rolling_zscore
+            method (SMOOTHING_METHOD, optional): Method used to smooth the CSI. 
+                - SMOOTHING_METHOD.NONE: Raw CSI without smoothing
+                - SMOOTHING_METHOD.KALMAN: Apply Kalman filter to denoise CSI
+                - SMOOTHING_METHOD.ROLLING_ZSCORE: Apply cross-currency rolling z-score
+
+        Returns:
+            pd.DataFrame: Smoothed CSI dataframe with currencies as columns and dates as index.
+
+        Raises:
+            AssertionError: If an invalid smoothing method is provided.
+        """
+        assert method in SMOOTHING_METHOD, f"Invalid smoothing method: {method}"
+
+        if method == SMOOTHING_METHOD.NONE:
+            return self.compute_csi(window=window)
+        elif method == SMOOTHING_METHOD.KALMAN:
+            return self.kalman_csi(window=window)
+        elif method == SMOOTHING_METHOD.ROLLING_ZSCORE:
+            return self.rolling_cross_csi_zscore(window=window, window2=window2)
+
+    def kalman_csi(self, window:int =60) -> pd.DataFrame:
+        cache_key = ('kalman', window)
+        if cache_key in self.pnl_cache:
+            return self.pnl_cache[cache_key]
+        
+        csi = self.compute_csi(window=window).dropna()
+        
+        smoothed_csi = pd.DataFrame(index=csi.index, columns=csi.columns)
+        for ccy in csi.columns:
+            series = csi[ccy]
+            kf = KalmanFilter(
+                transition_matrices = [1],
+                observation_matrices = [1],
+                initial_state_mean = series.iloc[0],
+                initial_state_covariance = 1,
+                observation_covariance = 1,     # You may tune this per currency
+                transition_covariance = 0.01    # Tune as needed
+            )
+
+            state_means, _ = kf.filter(series.values)
+            # Reassign filtered series back with correct dates
+            smoothed_csi.loc[series.index, ccy] = state_means.flatten()
+
+        self.pnl_cache[cache_key] = smoothed_csi 
+        return smoothed_csi
+    
     def rolling_cross_csi_zscore(self, window:int =60, window2: int = None) -> pd.DataFrame:
         # 2. Cross-currency Z-score (Rolling z-score using mean/std across all currencies)
         """
@@ -117,9 +184,7 @@ class CCY_STR:
         if cache_key in self.pnl_cache:
             return self.pnl_cache[cache_key]
         
-        prices = self.get_all_pairs()
-        returns = self.compute_strength(prices, window=window)
-        df = self.compute_csi(returns)
+        df = self.compute_csi(window=window)
         
         zscore_df = pd.DataFrame(index=df.index, columns=df.columns)
 
@@ -140,45 +205,58 @@ class CCY_STR:
         return zscore_df
     
     @before_exit
-    def compare_pnl(self, train_ratio, method=['spread']):
-        cache_key = ''.join([str(train_ratio)] + sorted(method))
-
+    def compare_pnl(self, train_ratio, 
+                    methods:List[SMOOTHING_METHOD]=[
+                        SMOOTHING_METHOD.NONE,
+                        SMOOTHING_METHOD.KALMAN,
+                        SMOOTHING_METHOD.ROLLING_ZSCORE]):
+        
         def weighted_mean(x):
             return x[('return', 'sum')].sum() / x[('return', 'count')].sum()
         
-        if not cache_key in self.pnl_cache:
-            out = []
-            idx = []
-            for window in tqdm(range(10, 700, 10)):
-                df = self.get_pnl_all(window, train_ratio=train_ratio, method=method)
-                if df.empty:
-                    break
+        dffinal= None
 
-                df2 = self.get_pnl_all(window, train_ratio=train_ratio, method=method, test_only=True)
-                if df2.empty:
-                    break
-                
-                idx.append(window)
-                # Calculate sum of returns and count for weighted mean
-                xx = df.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
-                xx2 = df2.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
+        for method in methods:
+            cache_key = ('compare_pnl', train_ratio, method)
+            if not cache_key in self.pnl_cache:
+                out = []
+                idx = []
+                for window in tqdm(range(10, 700, 10)):
+                    df = self.get_pnl_all(window, train_ratio=train_ratio, method=method)
+                    if df.empty:
+                        break
 
-                # Calculate weighted mean: sum of returns / total count
-                full_means = [weighted_mean(xx.xs(key=m, level=1)) for m in method]
-                test_means = [weighted_mean(xx2.xs(key=m, level=1)) for m in method]
+                    df2 = self.get_pnl_all(window, train_ratio=train_ratio, method=method, test_only=True)
+                    if df2.empty:
+                        break
+                    
+                    idx.append(window)
+                    # Calculate sum of returns and count for weighted mean
+                    xx = df.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
+                    xx2 = df2.groupby(['ccy', 'method']).agg({'return': ['sum', 'count']})
 
-                out.append(full_means + test_means)
+                    # Calculate weighted mean: sum of returns / total count
+                    full_means = [weighted_mean(xx.xs(key=method, level=1)) ]
+                    test_means = [weighted_mean(xx2.xs(key=method, level=1))]
 
-            columns = ['full_%s' % m for m in method] + ['test_%s' % m for m in method]
-            dfout = pd.DataFrame(out, columns=columns, index=idx)
-            self.pnl_cache[cache_key] = dfout
-        else:
+                    out.append(full_means + test_means)
+
+                columns = ['full_%s' % method, 'test_%s' % method]
+                self.pnl_cache[cache_key] = pd.DataFrame(out, columns=columns, index=idx)
+        
+            
             dfout = self.pnl_cache[cache_key]
-        HELPER.plot_chart(dfout, title=cache_key)
-        return dfout
+
+            if dffinal is None:
+                dffinal = dfout
+            else:
+                dffinal = dffinal.merge(dfout, how='inner', left_index=True, right_index=True)
+        title = '_'.join(map(str, [train_ratio] + [methods]))
+        HELPER.plot_chart(dffinal, title=title)
+        return dffinal
 
     @before_exit
-    def get_scaled_params(self, train_ratio=0.7) -> pd.DataFrame:
+    def get_scaled_params(self, train_ratio=0.7, method:SMOOTHING_METHOD=SMOOTHING_METHOD.ROLLING_ZSCORE) -> pd.DataFrame:
         """This generates mean and standard deviation of the Standard Scaler
 
         Args:
@@ -187,14 +265,14 @@ class CCY_STR:
         Returns:
             pd.DataFrame: DataFrame containing currency pair, window, train ratio, mean, and std.
         """
-        cache_key = ('get_scaled_params', train_ratio)
+        cache_key = ('get_scaled_params', train_ratio, method)
         if cache_key in self.pnl_cache:
             return self.pnl_cache[cache_key]
         
         out = []
         prices = self.get_all_pairs()
         for window in tqdm(range(10, 700, 10)):
-            csi2 = self.rolling_cross_csi_zscore(window=window, window2=window)
+            csi2 = self.smoothing_method(window=window, window2=window, method=method)
 
             for pair in prices.columns:
                 ccy1, ccy2 = pair[:3], pair[3:]
@@ -216,14 +294,14 @@ class CCY_STR:
         return df_result
     
     @before_exit
-    def get_pnl_all(self, window=200, window2=None, train_ratio=0.7, method=['spread'], test_only=False) -> pd.DataFrame:
+    def get_pnl_all(self, window=200, window2=None, train_ratio=0.7, method:SMOOTHING_METHOD=SMOOTHING_METHOD.ROLLING_ZSCORE, test_only=False) -> pd.DataFrame:
         """This generates PnL for all ccy
 
         Args:
             window (int, optional): window used for compute strength. Defaults to 200.
             window2 (_type_, optional): window used for compute rolling csi zscore. Defaults to None. If None is used, it will use window instead.
             train_ratio (float, optional): train ratio for train-test split. Defaults to 0.7.
-            method (list, optional): Spread and Zspread. Defaults to ['spread'].
+            method (list, optional): smoothing method. Options 'rolling_zscore', 'kalman', None. Defaults to rolling_zscore
             test_only (bool, optional): To generate PnL for test only. Defaults to False.
 
         Returns:
@@ -233,14 +311,14 @@ class CCY_STR:
             window2 = window
         
         # Create a unique cache key based on function parameters
-        cache_key = (window, window2, train_ratio, tuple(sorted(method)), test_only)
+        cache_key = (window, window2, train_ratio, method, test_only)
         
         if cache_key in self.pnl_cache:
             return self.pnl_cache[cache_key]
 
         out = []
         prices = self.get_all_pairs()
-        csi2 = self.rolling_cross_csi_zscore(window=window, window2=window2)
+        csi2 = self.smoothing_method(window=window, window2=window2, method=method)
         ranks = csi2.rank(axis=1, ascending=True, method='min')
 
         for pair in prices.columns:
@@ -248,44 +326,23 @@ class CCY_STR:
 
             spread = csi2[ccy1] - csi2[ccy2]
 
-            if 'zspread' in method:
-                zspread = self.rolling_zscore(spread, window=window)
-                entry1, exit1 = self.get_threshold_crosses(zspread, train_ratio=train_ratio, threshold=2, test_only=test_only)
-                if entry1 is not None:
-                    for o1, o2 in zip(entry1, exit1):
-                        direction = -1 if zspread.loc[o1] > 0 else 1
-                        out.append({
-                            'year': o1[:4],
-                            'ccy': pair,
-                            'entry_idx': o1,
-                            'exit_idx': o2,
-                            'entry_price': float(prices.loc[o1, pair]),
-                            'exit_price': float(prices.loc[o2, pair]),
-                            'spread': zspread.loc[o1],
-                            'ccy1_rank': int(ranks.loc[o1, ccy1]),
-                            'ccy2_rank': int(ranks.loc[o1, ccy2]),
-                            'method': 'zspread',
-                            'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
-                        })
-
-            if 'spread' in method:
-                entry2, exit2 = self.get_threshold_crosses(spread, train_ratio=train_ratio, threshold=2, test_only=test_only)
-                if entry2 is not None:
-                    for o1, o2 in zip(entry2, exit2):
-                        direction = -1 if spread.loc[o1] > 0 else 1
-                        out.append({
-                            'year': o1[:4],
-                            'ccy': pair,
-                            'entry_idx': o1,
-                            'exit_idx': o2,
-                            'entry_price': float(prices.loc[o1, pair]),
-                            'exit_price': float(prices.loc[o2, pair]),
-                            'spread': spread.loc[o1],
-                            'ccy1_rank': int(ranks.loc[o1, ccy1]),
-                            'ccy2_rank': int(ranks.loc[o1, ccy2]),
-                            'method': 'spread',
-                            'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
-                        })
+            entry2, exit2 = self.get_threshold_crosses(spread, train_ratio=train_ratio, threshold=2, test_only=test_only)
+            if entry2 is not None:
+                for o1, o2 in zip(entry2, exit2):
+                    direction = -1 if spread.loc[o1] > 0 else 1
+                    out.append({
+                        'year': o1[:4],
+                        'ccy': pair,
+                        'entry_idx': o1,
+                        'exit_idx': o2,
+                        'entry_price': float(prices.loc[o1, pair]),
+                        'exit_price': float(prices.loc[o2, pair]),
+                        'spread': spread.loc[o1],
+                        'ccy1_rank': int(ranks.loc[o1, ccy1]),
+                        'ccy2_rank': int(ranks.loc[o1, ccy2]),
+                        'method': method,
+                        'return': float(prices.loc[o2, pair] / prices.loc[o1, pair] - 1) * direction
+                    })
 
         df_result = pd.DataFrame(out)
         self.pnl_cache[cache_key] = df_result  # Cache the result
@@ -294,7 +351,7 @@ class CCY_STR:
         # return pd.DataFrame(out, columns=['year', 'ccy', 'entry_idx', 'exit_idx', 'entry_price', 'exit_price', 'spread', 'ccy1_rank', 'ccy2_rank', 'method', 'return'])
 
     @before_exit
-    def get_pending_trades_all(self, window=200, window2=None, train_ratio=0.7, method=['spread']) -> pd.DataFrame:
+    def get_pending_trades_all(self, window=200, window2=None, train_ratio=0.7, method:SMOOTHING_METHOD=SMOOTHING_METHOD.ROLLING_ZSCORE) -> pd.DataFrame:
         """This return pending trades
 
         Args:
@@ -311,36 +368,35 @@ class CCY_STR:
             window2 = window
         
         # Create a unique cache key based on function parameters
-        cache_key = ("pending", window, window2, train_ratio, tuple(sorted(method)))
+        cache_key = ("pending", window, window2, train_ratio, method)
         
         if cache_key in self.pnl_cache:
             return self.pnl_cache[cache_key]
 
         out = []
         prices = self.get_all_pairs()
-        csi2 = self.rolling_cross_csi_zscore(window=window, window2=window2)
+        csi2 = self.smoothing_method(window=window, window2=window2, method=method)
         ranks = csi2.rank(axis=1, ascending=True, method='min')
 
         for pair in prices.columns:
             ccy1, ccy2 = pair[:3], pair[3:]
             spread = csi2[ccy1] - csi2[ccy2]
 
-            if 'spread' in method:
-                entry2, exit2 = self.get_threshold_crosses(spread, train_ratio=train_ratio, threshold=2)
-                if len(entry2) != len(exit2):
-                    o1 = entry2[-1]
-                    direction = -1 if spread.loc[o1] > 0 else 1
-                    out.append({
-                        'year': o1[:4],
-                        'ccy': pair,
-                        'entry_idx': o1,
-                        'entry_price': float(prices.loc[o1, pair]),
-                        'spread': spread.loc[o1],
-                        'ccy1_rank': int(ranks.loc[o1, ccy1]),
-                        'ccy2_rank': int(ranks.loc[o1, ccy2]),
-                        'method': 'spread',
-                        'direction' : direction
-                    })
+            entry2, exit2 = self.get_threshold_crosses(spread, train_ratio=train_ratio, threshold=2)
+            if len(entry2) != len(exit2):
+                o1 = entry2[-1]
+                direction = -1 if spread.loc[o1] > 0 else 1
+                out.append({
+                    'year': o1[:4],
+                    'ccy': pair,
+                    'entry_idx': o1,
+                    'entry_price': float(prices.loc[o1, pair]),
+                    'spread': spread.loc[o1],
+                    'ccy1_rank': int(ranks.loc[o1, ccy1]),
+                    'ccy2_rank': int(ranks.loc[o1, ccy2]),
+                    'method': method,
+                    'direction' : direction
+                })
 
         df_result = pd.DataFrame(out)
         self.pnl_cache[cache_key] = df_result  # Cache the result
@@ -383,7 +439,8 @@ class CCY_STR:
 
         return entries, exits
 
-    def get_spread(self, pair: str, window: int, window2: int=None, train_ratio=0.7, visualize=False):
+    def get_spread(self, pair: str, window: int, window2: int=None, method:SMOOTHING_METHOD= SMOOTHING_METHOD.ROLLING_ZSCORE, 
+                   train_ratio=0.7, visualize=False):
         """This return rolling csi spread for selected ccy
 
         Args:
@@ -394,7 +451,7 @@ class CCY_STR:
         if window2 is None:
             window2 = window
         prices = self.get_all_pairs()
-        csi2 = self.rolling_cross_csi_zscore(window=window, window2=window2)
+        csi2 = self.smoothing_method(window=window, window2=window2, method=method)
         ccy1, ccy2 = pair[:3], pair[3:]
 
         if not pair in prices.columns:
@@ -402,8 +459,9 @@ class CCY_STR:
 
         spread = csi2[ccy1] - csi2[ccy2]
         if visualize:
+            prices['%s_ma' % pair] = prices[pair].rolling(window=window).mean()
             print(HELPER.get_scaled_mean_std(spread, train_ratio=train_ratio))
-            HELPER.plot_chart(prices[pair], spread, scale=SCALE.OTHER, hline=2, train_ratio=train_ratio)  # Choose what to plot
+            HELPER.plot_chart(prices[[pair, '%s_ma' % pair]], spread, scale=SCALE.OTHER, hline=2, train_ratio=train_ratio)  # Choose what to plot
         return spread
 
 class CCY_STR_DEBUG(CCY_STR):
@@ -493,7 +551,8 @@ class CCY_STR_DEBUG(CCY_STR):
             pnl2['ccy2_rank'] = ccy_rank
             
         print(pnl2.iloc[idx])
-        HELPER.plot_chart(self.prices[self.pair], spread, scale=scale, hline=2, train_ratio=self.train_ratio, window=(pos1, pos2) )  
+        self.prices['%s_ma' % self.pair] = self.prices[self.pair].rolling(window=self.window).mean()
+        HELPER.plot_chart(self.prices[[self.pair, '%s_ma' % self.pair]], spread, scale=scale, hline=2, train_ratio=self.train_ratio, window=(pos1, pos2) )  
         return pnl2
     
 if __name__ == '__main__':
@@ -502,8 +561,8 @@ if __name__ == '__main__':
     dt = '2017-01-01'
     pair ='USDJPY'
     window = 100
-    returns = c.compute_strength(prices, window=window)
-    csi = c.compute_csi(returns)
+
+    csi = c.compute_csi(window=window)
     csi2 = csi[csi.index > dt]
     prices2 = prices[prices.index > dt].copy()
     if not pair in prices2.columns:
