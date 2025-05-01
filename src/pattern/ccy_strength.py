@@ -350,6 +350,42 @@ class CCY_STR:
 
         # return pd.DataFrame(out, columns=['year', 'ccy', 'entry_idx', 'exit_idx', 'entry_price', 'exit_price', 'spread', 'ccy1_rank', 'ccy2_rank', 'method', 'return'])
 
+    
+    def mt5_export(self, window=200, window2=None, train_ratio=0.7, method:SMOOTHING_METHOD=SMOOTHING_METHOD.ROLLING_ZSCORE) -> pd.DataFrame:
+        """export csi to mt5 format
+
+        Args:
+            window (int, optional): window used for compute strength. Defaults to 200.
+            window2 (_type_, optional): window used for compute rolling csi zscore. Defaults to None. If None is used, it will use window instead.
+            train_ratio (float, optional): train ratio for train-test split. Defaults to 0.7.
+            method (SMOOTHING_METHOD, optional): smoothing method for csi. Defaults to SMOOTHING_METHOD.ROLLING_ZSCORE.
+
+        Returns:
+            pd.DataFrame: csi of all pairs in mt5 format
+        """
+        prices = self.get_all_pairs()
+        csi2 = self.smoothing_method(window=window, window2=window2, method=method)
+        ret =[]
+        for pair in prices.columns:
+            ccy1, ccy2 = pair[:3], pair[3:]
+            spread = csi2[ccy1] - csi2[ccy2]
+            scaled_df = HELPER.get_scaled(spread, train_ratio=train_ratio, test_only=False)
+            ret.append(scaled_df)
+        
+        dfout = pd.concat(ret, axis=1)
+        dfout.columns = prices.columns
+        dfout.reset_index(inplace=True)
+
+        epoch = pd.Timestamp("1970-01-01")
+        dfout.insert(0, 'timestamp', (pd.to_datetime(dfout['index'])-epoch).dt.days)
+        
+        dfout['index'] = pd.to_datetime(dfout['index']).dt.strftime('%Y.%m.%d %H:%M:%S')
+        dfout.set_index('index',drop=True, inplace=True)
+
+        fname = '%s_%s_%s.csv' % (window, train_ratio, method)
+        dfout.dropna().to_csv(f'files/mt5_export/{fname}')
+        return dfout
+
     @before_exit
     def get_pending_trades_all(self, window=200, window2=None, train_ratio=0.7, method:SMOOTHING_METHOD=SMOOTHING_METHOD.ROLLING_ZSCORE) -> pd.DataFrame:
         """This return pending trades
@@ -557,18 +593,19 @@ class CCY_STR_DEBUG(CCY_STR):
     
 if __name__ == '__main__':
     c = CCY_STR()
-    prices = c.get_all_pairs()  
-    dt = '2017-01-01'
-    pair ='USDJPY'
-    window = 100
+    c.mt5_export()
+    # prices = c.get_all_pairs()  
+    # dt = '2017-01-01'
+    # pair ='USDJPY'
+    # window = 100
 
-    csi = c.compute_csi(window=window)
-    csi2 = csi[csi.index > dt]
-    prices2 = prices[prices.index > dt].copy()
-    if not pair in prices2.columns:
-        prices2[pair] = 1/ prices2[pair[3:] + pair[:3]]
+    # csi = c.compute_csi(window=window)
+    # csi2 = csi[csi.index > dt]
+    # prices2 = prices[prices.index > dt].copy()
+    # if not pair in prices2.columns:
+    #     prices2[pair] = 1/ prices2[pair[3:] + pair[:3]]
         
-    spread = csi2[pair[:3]] -csi2[pair[3:]]
-    zspread = c.rolling_zscore(spread, window=window)
+    # spread = csi2[pair[:3]] -csi2[pair[3:]]
+    # zspread = c.rolling_zscore(spread, window=window)
 
-    HELPER.plot_chart(prices2[pair], csi2)  # Choose what to plot
+    # HELPER.plot_chart(prices2[pair], csi2)  # Choose what to plot

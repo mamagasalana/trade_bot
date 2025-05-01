@@ -19,3 +19,4 @@ tensorflow-probability[tf]
 nasdaq-data-link
 python-dotenv
 pykalman
+pomegranate
