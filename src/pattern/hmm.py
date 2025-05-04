@@ -131,8 +131,8 @@ class HMM:
         fig, ax1 = plt.subplots(figsize=(12, 4))
 
         colors = ['tab:red', 'tab:orange', 'yellow', 'tab:green', 'tab:blue', 'tab:pink']
-        df_probs.plot(ax=ax1 , color=colors)
-        ax1.axvline(x=df_probs.index[split_idx], color='red', linestyle='--', label='Train/Test Split')
+        df_probs.plot(ax=ax1 , color=colors, linewidth=3)
+        ax1.axvline(x=df_probs.index[split_idx], color='red', linestyle='--', label='Train/Test Split', linewidth=3)
         ax1.set_ylabel("Regime Probabilities")
         ax1.set_xlabel("Date")
         ax1.grid(True)
@@ -140,7 +140,7 @@ class HMM:
 
         # Plot  price on second axis
         ax2 = ax1.twinx()
-        ax2.plot(df_probs.index, price, color='black', label=f'{pair2} Price', alpha=0.4, linewidth=5)
+        ax2.plot(df_probs.index, price, color='black', label=f'{pair2} Price', alpha=0.4, linewidth=1)
         ax2.set_ylabel(pair2)
         ax2.legend(loc="upper right")
 
@@ -161,7 +161,7 @@ class HMM:
             cov = cov_tensor.numpy()
             mean_data.append(mean)
             var_data.append(np.diag(cov))
-            states.append('State %s' % i)
+            states.append(i)
 
         # pairs= sorted(list(set(x[:3] for x in columns)))
         pairs = self.pairs
