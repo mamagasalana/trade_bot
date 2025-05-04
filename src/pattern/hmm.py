@@ -507,7 +507,7 @@ class HMM:
 
         """
         if use_spread:
-            col = set([x[:6] for x in self.spreads.columns])
+            col = set([x[:6] for x in self.spreads.columns if x != 'timestamp'])
             for ccy in col:
                 self.get_pnl([ccy[:3], ccy[3:]], diffs_shift=diffs_shift, diffs=diffs,
                              use_spread=use_spread, n_components=n_components, train_ratio=train_ratio,
