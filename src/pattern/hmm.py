@@ -15,58 +15,88 @@ class HMM:
         self.windows= windows
         data = []
         ranks = []
+        spread = []
         for window in windows:
             data.append(self.c.smoothing_method(window, method=method).add_suffix(f'_{window}'))
+            spread.append(self.c.mt5_export(window=window, method=method).add_suffix(f'_{window}'))
             ranks.append(data[-1].rank(axis=1, method='min', ascending=False))
-
+            
         self.data = pd.concat(data, axis=1)
         self.ranks = pd.concat(ranks, axis=1)
+        self.spreads = pd.concat(spread, axis=1)
         self.prices = self.c.get_all_pairs()
 
-    def plot(self, pairs=['EUR', 'USD'], diffs_shift=[], diffs=[],use_rank=False, n_components=3, train_ratio=0.7, window_size=300, verbose=False):
-        """plot hmm
+    def get_data(self, pairs=['EUR', 'USD'], diffs_shift=[], diffs=[],use_rank=False, use_spread=False) -> pd.DataFrame:
+        """get data
 
         Args:
             pairs (list, optional): list of currency. Defaults to ['EUR', 'USD'].
             diffs_shift (list, optional): list of lags to measure strength momentum. Defaults to [].
             diffs (list, optional): list of size of diff to measure strength momentum. Defaults to [].
             use_rank (bool, optional): when use, add rank to fit HMM model. Defaults to False.
+            use_spread (bool, optional): when use, use spread instead of original ccy values. Defaults to False.
+        """
+
+        if use_spread:
+            if pairs[0] + pairs[1] in [ x[:6] for x in self.spreads.columns]:
+                pair2 = pairs[0] + pairs[1]
+            else:
+                pair2 = pairs[1] + pairs[0]
+
+            pairs= [pair2]
+            pairs_windows =list(itertools.product(pairs, self.windows))
+            pw2 = ['_'.join(map(str, pw)) for pw in pairs_windows]
+            data = self.spreads
+        else:
+            pairs_windows =list(itertools.product(pairs, self.windows))
+            pw2 = ['_'.join(map(str, pw)) for pw in pairs_windows]
+            data = self.data
+
+        self.pairs = pairs
+
+        pairs_strength_diffs_shift = []
+        for i in diffs_shift:
+            pairs_strength_diffs_shift.append(data[pw2].diff(1).shift(i).add_suffix(f'_shift{i}'))
+
+        pairs_strength_diffs = []
+        for i in diffs:
+            pairs_strength_diffs.append(data[pw2].diff(i).add_suffix(f'_diff{i}'))
+
+
+        if use_rank and not use_spread:
+            df = pd.concat([data[pw2], self.ranks[pw2].add_suffix('_rank')] +pairs_strength_diffs+pairs_strength_diffs_shift, axis=1)
+        else:
+            df = pd.concat([data[pw2]] + pairs_strength_diffs+pairs_strength_diffs_shift, axis=1)
+        
+        return df
+
+    def plot(self, df:pd.DataFrame, n_components=3, train_ratio=0.7, window_size=300, verbose=False) -> DenseHMM:
+        """plot hmm
+
+        Args:
+        
             n_components (int, optional): number of HMM states. Defaults to 3.
             train_ratio (float, optional): train ratio to fit HMM model. Defaults to 0.7.
             window_size (int, optional): each batch size to fit HMM model. Defaults to 300.
             verbose(bool, optional): used by HMM to display debug message
+
+        Returns:
+            DenseHMM: HMM model fit with the given parameters
         """
 
-        pairs_windows =list(itertools.product(pairs, self.windows))
-
-        pw2 = ['_'.join(map(str, pw)) for pw in pairs_windows]
-
-        pairs_strength_diffs_shift = []
-        for i in diffs_shift:
-            pairs_strength_diffs_shift.append(self.data[pw2].diff(1).shift(i).add_suffix(f'_shift{i}'))
-
-        pairs_strength_diffs = []
-        for i in diffs:
-            pairs_strength_diffs.append(self.data[pw2].diff(i).add_suffix(f'_diff{i}'))
-
-        if use_rank:
-            combined = pd.concat([self.data[pw2], self.ranks[pw2].add_suffix('_rank')] +pairs_strength_diffs+pairs_strength_diffs_shift, axis=1)
-        else:
-            combined = pd.concat([self.data[pw2]] + pairs_strength_diffs+pairs_strength_diffs_shift, axis=1)
-        
-        split_idx = int(len(combined) *train_ratio)
-        split_dt = combined.index[split_idx]
+        split_idx = int(len(df) *train_ratio)
+        split_dt = df.index[split_idx]
         print(split_dt)
 
-        combined.dropna(inplace=True)
-        X_full = combined.values.astype(np.float64)  # shape: (n_days, 2 * n_assets)
+        df.dropna(inplace=True)
+        X_full = df.values.astype(np.float64)  # shape: (n_days, 2 * n_assets)
         step_size = 1  # can increase to skip less overlapping windows
         windows = []
         rolling_index = []
         for i in range(0, len(X_full) - window_size + 1, step_size):
             w = X_full[i:i + window_size]
             windows.append(w)
-            rolling_index.append(combined.index[i + window_size - 1])
+            rolling_index.append(df.index[i + window_size - 1])
 
         X_rolling = np.stack(windows)  
         split_idx = rolling_index.index(split_dt)
@@ -81,11 +111,22 @@ class HMM:
         df_probs = pd.DataFrame(last_probs, columns=[f"regime_{i}" for i in range(last_probs.shape[1])])
         df_probs.index = pd.to_datetime(rolling_index)  # restore original datetime index
 
-        if pairs[0] + pairs[1] in self.prices.columns:
-            pair2 = pairs[0] + pairs[1]
+
+        pairs= self.pairs
+        if len(pairs[0]) ==3:
+            if pairs[0] + pairs[1] in self.prices.columns:
+                pair2 = pairs[0] + pairs[1]
+            else:
+                pair2 = pairs[1] + pairs[0]
+            
+            price = self.prices[pair2].loc[rolling_index]
         else:
-            pair2 = pairs[1] + pairs[0]
-        price = self.prices[pair2].loc[rolling_index]
+            pair2 = pairs[0]
+            if pair2 not in self.prices.columns:
+                price = 1/self.prices[pair2[3:] + pair2[:3]].loc[pd.to_datetime(rolling_index).strftime('%Y-%m-%d')]
+            else:
+                price = self.prices[pair2].loc[pd.to_datetime(rolling_index).strftime('%Y-%m-%d')]
+        
         # Add vertical line at the train/test split index
         fig, ax1 = plt.subplots(figsize=(12, 4))
 
@@ -97,9 +138,9 @@ class HMM:
         ax1.grid(True)
         ax1.legend(loc="upper left")
 
-        # Plot EURUSD price on second axis
+        # Plot  price on second axis
         ax2 = ax1.twinx()
-        ax2.plot(df_probs.index, price, color='black', label=f'{pair2} Price', alpha=0.4, linewidth=2.5)
+        ax2.plot(df_probs.index, price, color='black', label=f'{pair2} Price', alpha=0.4, linewidth=5)
         ax2.set_ylabel(pair2)
         ax2.legend(loc="upper right")
 
@@ -107,7 +148,7 @@ class HMM:
         plt.tight_layout()
         plt.show()
 
-        return combined, model
+        return model
     
     def heat_map(self, model, columns):
         
@@ -122,7 +163,8 @@ class HMM:
             var_data.append(np.diag(cov))
             states.append('State %s' % i)
 
-        pairs= sorted(list(set(x[:3] for x in columns)))
+        # pairs= sorted(list(set(x[:3] for x in columns)))
+        pairs = self.pairs
         total_pairs = len(pairs)
         # Create DataFrames
         df_mean = pd.DataFrame(mean_data, index=states, columns=columns)
