@@ -7,12 +7,26 @@ from src.pattern.helper import HELPER
 import matplotlib.pyplot as plt  # Make sure this import is at the top
 import itertools
 import seaborn as sns
+from src.csv.cache import CACHE
+
+def before_exit(func):
+    def wrapper(self, *args, **kwargs):
+        try:
+            self.updated=True
+            return func(self, *args, **kwargs)
+        finally:
+            if self.updated:
+                self.save_cache()
+    return wrapper
 
 class HMM:
 
     def __init__(self, windows=[300, 400, 500], method=SMOOTHING_METHOD.ROLLING_ZSCORE):
         self.c = CCY_STR(['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS'])
         self.windows= windows
+        self.updated = False
+        self.method = method
+        self.cache = CACHE('hmm_cache.cache')
         data = []
         ranks = []
         spread = []
@@ -25,7 +39,12 @@ class HMM:
         self.ranks = pd.concat(ranks, axis=1)
         self.spreads = pd.concat(spread, axis=1)
         self.prices = self.c.get_all_pairs()
+        self._data_cache = self.cache.get_pickle() or {}
 
+    def save_cache(self):
+        self.cache.set_pickle(self._data_cache)
+
+    @before_exit
     def get_data(self, pairs=['EUR', 'USD'], diffs_shift=[], diffs=[],use_rank=False, use_spread=False) -> pd.DataFrame:
         """get data
 
@@ -35,7 +54,20 @@ class HMM:
             diffs (list, optional): list of size of diff to measure strength momentum. Defaults to [].
             use_rank (bool, optional): when use, add rank to fit HMM model. Defaults to False.
             use_spread (bool, optional): when use, use spread instead of original ccy values. Defaults to False.
+
+        Returns:
+            pd.DataFrame: data to fit HMM model
         """
+
+        param_dict = {
+            'windows': sorted(self.windows),
+            'pairs': sorted(pairs),  # make hashable
+            'diffs_shift': sorted(diffs_shift),
+            'diffs': sorted(diffs),
+            'use_rank': use_rank,
+            'use_spread': use_spread,
+            'method' : self.method,
+        }
 
         if use_spread:
             if pairs[0] + pairs[1] in [ x[:6] for x in self.spreads.columns]:
@@ -54,6 +86,12 @@ class HMM:
 
         self.pairs = pairs
 
+        cache_key = str(param_dict)  # or use hash(frozenset(param_dict.items()))
+        # Example: check if result is in cache
+        if cache_key in self._data_cache:
+            self.updated = False
+            return self._data_cache[cache_key]
+    
         pairs_strength_diffs_shift = []
         for i in diffs_shift:
             pairs_strength_diffs_shift.append(data[pw2].diff(1).shift(i).add_suffix(f'_shift{i}'))
@@ -68,9 +106,11 @@ class HMM:
         else:
             df = pd.concat([data[pw2]] + pairs_strength_diffs+pairs_strength_diffs_shift, axis=1)
         
+        self._data_cache[cache_key] = df
         return df
 
-    def plot(self, df:pd.DataFrame, n_components=3, train_ratio=0.7, window_size=300, verbose=False) -> DenseHMM:
+    @before_exit
+    def plot(self, df:pd.DataFrame, n_components=3, train_ratio=0.7, window_size=300, verbose=False, use_full=False) -> DenseHMM:
         """plot hmm
 
         Args:
@@ -101,12 +141,28 @@ class HMM:
         X_rolling = np.stack(windows)  
         split_idx = rolling_index.index(split_dt)
 
-        model = DenseHMM([Normal() for _ in range(n_components)], max_iter=100, verbose=verbose)
+        param_dict = {
+            'n_components': n_components,
+            'train_ratio': train_ratio,
+            'window_size': window_size,
+            'method' : self.method,
+        }
 
-        model.fit([X_rolling[:split_idx]])
+        cache_key =  '_'.join(df.columns)  + str(param_dict)
+        if cache_key in self._data_cache:
+            self.updated = False
+            model =  self._data_cache[cache_key]
+        else:
+            model = DenseHMM([Normal() for _ in range(n_components)], max_iter=100, verbose=verbose)
+            model.fit([X_rolling[:split_idx]])
+            self._data_cache[cache_key] = model
         
-        ret = model.predict_proba(X_rolling)
-        last_probs = ret[:, -1, :].numpy() 
+        if use_full: 
+            last_probs = model.predict_proba(X_full.reshape(1, X_full.shape[0], X_full.shape[1]))[0][window_size-1:]
+        else:
+            ret = model.predict_proba(X_rolling)
+            last_probs = ret[:, -1, :].numpy() 
+
         
         df_probs = pd.DataFrame(last_probs, columns=[f"regime_{i}" for i in range(last_probs.shape[1])])
         df_probs.index = pd.to_datetime(rolling_index)  # restore original datetime index
