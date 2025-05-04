@@ -57,10 +57,13 @@ class CCY_STR:
     def save_cache(self):
         self.cache.set_pickle(self.full_pnl_cache)
 
-    def get_all_pairs(self) -> pd.DataFrame:
+    def get_all_pairs(self, comb=True) -> pd.DataFrame:
         """Compute currency strength index using USD as anchor."""
         # pairs= [ccy+denominated_ccy for ccy in self.CURRENCIES]
-        pairs = [''.join(x) for x in itertools.combinations(self.CURRENCIES, 2)]
+        if comb:
+            pairs = [''.join(x) for x in itertools.combinations(self.CURRENCIES, 2)]
+        else:
+            pairs = [''.join(x) for x in itertools.permutations(self.CURRENCIES, 2)]
         data = self.fr.get_pairs(pairs)
         # data.columns = self.CURRENCIES
         return data
