@@ -1,6 +1,7 @@
 import os
 import pickle
 import logging
+import hashlib
 
 class CACHE:
     def __init__(self, filename):
@@ -39,3 +40,42 @@ class CACHE:
                 logging.debug(f"Pickle file {f} successfully saved.")
         except Exception as e:
             logging.debug(f"Error saving pickle file {f}: {e}")
+
+
+class CACHE2:
+    def __init__(self, version_name):
+        self.folder = os.path.join('/home/ytee3/caches', version_name)
+        os.makedirs(self.folder, exist_ok=True)
+
+    def _hash_key(self, key):
+        """Convert the key into a safe hashed filename."""
+        return hashlib.sha256(key.encode('utf-8')).hexdigest()
+
+    def _file_path(self, key):
+        """Get the full file path for a given key."""
+        return os.path.join(self.folder, self._hash_key(key))
+
+    def __getitem__(self, key):
+        filename = self._file_path(key)
+        if os.path.exists(filename):
+            try:
+                with open(filename, 'rb') as ifile:
+                    logging.debug(f"Loading pickle from {filename}")
+                    return pickle.load(ifile)
+            except (pickle.PickleError, EOFError, Exception) as e:
+                logging.debug(f"Error loading pickle file {filename}: {e}")
+                return None
+        logging.debug(f"Pickle file {filename} not found.")
+        return None
+
+    def __setitem__(self, key, value):
+        filename = self._file_path(key)
+        try:
+            with open(filename, 'wb') as ofile:
+                pickle.dump(value, ofile)
+                logging.debug(f"Saved pickle to {filename}")
+        except Exception as e:
+            logging.debug(f"Error saving pickle to {filename}: {e}")
+
+    def __contains__(self, key):
+        return os.path.exists(self._file_path(key))

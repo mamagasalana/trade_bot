@@ -7,17 +7,8 @@ from src.pattern.helper import HELPER
 import matplotlib.pyplot as plt  # Make sure this import is at the top
 import itertools
 import seaborn as sns
-from src.csv.cache import CACHE
-
-def before_exit(func):
-    def wrapper(self, *args, **kwargs):
-        try:
-            self.updated=True
-            return func(self, *args, **kwargs)
-        finally:
-            if self.updated:
-                self.save_cache()
-    return wrapper
+from src.csv.cache import CACHE2
+from tqdm import tqdm
 
 class HMM:
 
@@ -25,19 +16,10 @@ class HMM:
                  ccylist=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']):
         self.ccylist= ccylist
         self.windows= windows
-        self.updated = False
         self.method = method
-        self.cache = CACHE('hmm_cache.cache')
-
-        
-        self._data_cache = self.cache.get_pickle() or {}
-
+        self.cache = CACHE2('hmm_cache.cache')
         self.get_init()
 
-    def save_cache(self):
-        self.cache.set_pickle(self._data_cache)
-
-    @before_exit
     def get_init(self):
 
         param_dict= {
@@ -49,9 +31,7 @@ class HMM:
         cache_key = str(param_dict)  
         
         # Example: check if result is in cache
-        if cache_key in self._data_cache:
-            self.updated = False        
-        else:
+        if cache_key not in self.cache:
             self.c = CCY_STR(self.ccylist)
 
             data = []
@@ -61,23 +41,22 @@ class HMM:
                 data.append(self.c.smoothing_method(window, method=self.method).add_suffix(f'_{window}'))
                 spread.append(self.c.mt5_export(window=window, method=self.method).add_suffix(f'_{window}'))
                 ranks.append(data[-1].rank(axis=1, method='min', ascending=False))
-                
-            self.data = pd.concat(data, axis=1)
-            self.ranks = pd.concat(ranks, axis=1)
-            self.spreads = pd.concat(spread, axis=1)
-            self._data_cache[cache_key] = {}
-            if not 'prices' in self._data_cache:
-                self._data_cache['prices'] = self.c.get_all_pairs(comb=False)
-            self._data_cache[cache_key]['data'] = self.data 
-            self._data_cache[cache_key]['ranks'] = self.ranks 
-            self._data_cache[cache_key]['spreads'] = self.spreads 
+            
+            data_cache = {}
+            data_cache['data'] =  pd.concat(data, axis=1)
+            data_cache['ranks'] =  pd.concat(ranks, axis=1)
+            data_cache['spreads'] = pd.concat(spread, axis=1)
+            self.cache[cache_key] = data_cache
 
-        self.prices =  self._data_cache['prices']
-        self.data =  self._data_cache[cache_key]['data']
-        self.ranks =  self._data_cache[cache_key]['ranks']
-        self.spreads =  self._data_cache[cache_key]['spreads']
+            if not 'prices' in self.cache:
+                self.cache['prices'] = self.c.get_all_pairs(comb=False)
+
+        data_cache = self.cache[cache_key]
+        self.prices =  self.cache['prices']
+        self.data =  data_cache['data']
+        self.ranks =  data_cache['ranks']
+        self.spreads =  data_cache['spreads']
         
-    @before_exit
     def get_data(self, pairs=['EUR', 'USD'], diffs_shift=[], diffs=[],use_rank=False, use_spread=False) -> pd.DataFrame:
         """get data
 
@@ -122,9 +101,8 @@ class HMM:
 
         cache_key = str(param_dict)  # or use hash(frozenset(param_dict.items()))
         # Example: check if result is in cache
-        if cache_key in self._data_cache:
-            self.updated = False
-            return self._data_cache[cache_key]
+        if cache_key in self.cache:
+            return self.cache[cache_key]
     
         pairs_strength_diffs_shift = []
         for i in diffs_shift:
@@ -140,10 +118,9 @@ class HMM:
         else:
             df = pd.concat([data[pw2]] + pairs_strength_diffs+pairs_strength_diffs_shift, axis=1)
         
-        self._data_cache[cache_key] = df
+        self.cache[cache_key] = df
         return df
 
-    @before_exit
     def model(self, df:pd.DataFrame, n_components=3, train_ratio=0.7, window_size=300, verbose=False, use_full=False, visualize=False) -> DenseHMM:
         """plot hmm
 
@@ -181,13 +158,12 @@ class HMM:
         }
 
         cache_key =  '_'.join(df.columns)  + str(param_dict)
-        if cache_key in self._data_cache:
-            self.updated = False
-            model =  self._data_cache[cache_key]
+        if cache_key in self.cache:
+            model =  self.cache[cache_key]
         else:
             model = DenseHMM([Normal() for _ in range(n_components)], max_iter=100, verbose=verbose)
             model.fit([X_rolling[:split_idx]])
-            self._data_cache[cache_key] = model
+            self.cache[cache_key] = model
         
         if use_full: 
             last_probs = model.predict_proba(X_full.reshape(1, X_full.shape[0], X_full.shape[1]))[0][window_size-1:]
@@ -281,7 +257,6 @@ class HMM:
         
         return df_mean
 
-    @before_exit
     def get_pnl(self, pairs=['EUR', 'USD'], diffs_shift=[], diffs=[],use_rank=False, use_spread=False, 
                     n_components=3, train_ratio=0.7, window_size=300, test_only=False,
                     crossing_threshold=0.5, pending=False
@@ -321,12 +296,12 @@ class HMM:
         # Create a unique cache key based on function parameters
         cache_key = str(param_dict)
         
-        if cache_key in self._data_cache:
-            self.updated =False
+        if cache_key in self.cache:
+            data_cache = self.cache[cache_key] 
             if pending:
-                return self._data_cache[cache_key]['pending']
+                return data_cache['pending']
             else:
-                return self._data_cache[cache_key]['closed']
+                return data_cache['closed']
 
 
         df =self.get_data(sorted(pairs), diffs_shift=diffs_shift, diffs=diffs, use_rank=use_rank, use_spread=use_spread)
@@ -338,13 +313,16 @@ class HMM:
 
         closed, pending = self.extract_regime_trades(probs, ''.join(sorted(pairs)), threshold=crossing_threshold)
 
-        self._data_cache[cache_key] = {} 
-        self._data_cache[cache_key]['closed'] = closed
-        self._data_cache[cache_key]['pending'] = pending
+        data_cache = {
+            'closed' : closed,
+            'pending': pending
+        } 
+        self.cache[cache_key] =  data_cache
+
         if pending:
-            return self._data_cache[cache_key]['pending']
+            return data_cache['pending']
         else:
-            return self._data_cache[cache_key]['closed']
+            return data_cache['closed']
 
 
     def extract_regime_trades(self, df_probs: pd.DataFrame, 
@@ -410,7 +388,6 @@ class HMM:
         return closed, pending
 
 
-    @before_exit
     def get_pnl_usd_denominated(self, pair='EUR', diffs_shift=[], diffs=[], 
                     n_components=3, train_ratio=0.7, window_size=300, test_only=False,
                     crossing_threshold=0.5, pending=False
@@ -448,12 +425,12 @@ class HMM:
         # Create a unique cache key based on function parameters
         cache_key = str(param_dict)
         
-        if cache_key in self.pnl_cache:
-            self.updated =False
+        if cache_key in self.cache:
+            data_cache = self.cache[cache_key]
             if pending:
-                return self.pnl_cache[cache_key]['pending']
+                return data_cache['pending']
             else:
-                return self.pnl_cache[cache_key]['closed']
+                return data_cache['closed']
 
 
         closed_all =[]
@@ -477,14 +454,16 @@ class HMM:
                 closed_all.extend(closed)
                 pending_all.extend(pending)
 
-        self.pnl_cache[cache_key] = {} 
-        self.pnl_cache[cache_key]['closed'] = closed_all
-        self.pnl_cache[cache_key]['pending'] = pending_all
-        
+        data_cache = {
+            'closed' : closed_all,
+            'pending': pending_all
+        } 
+        self.cache[cache_key] =  data_cache
+
         if pending:
-            return self.pnl_cache[cache_key]['pending']
+            return data_cache['pending']
         else:
-            return self.pnl_cache[cache_key]['closed']
+            return data_cache['closed']
 
 
     def get_pnl_all(self, diffs_shift=[], diffs=[],use_rank=False, use_spread=False, 
