@@ -14,6 +14,9 @@ class BOJ:
         self.session = requests.Session()
         self.validation= []
         self.metadata_cache = None
+        if not os.path.isdir( 'files/boj'):
+            os.makedirs('files/boj')
+            
     @property
     def header_categories(self):
         return {

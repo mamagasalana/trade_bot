@@ -50,6 +50,8 @@ class FRED:
         self.start_year = start_year
         self.end_year= end_year
         self.usd_ccy_list = None
+        if not os.path.isdir(f'files/fred'):
+            os.makedirs(f'files/fred' , exist_ok=True)
     
     @property
     def filename(self):
