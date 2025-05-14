@@ -9,6 +9,15 @@ import itertools
 import seaborn as sns
 from src.csv.cache import CACHE2
 from tqdm import tqdm
+import logging
+
+logging.basicConfig(
+    filename='hmm.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    force=True  # <- Python 3.8+: force reconfiguration
+)
 
 class HMM:
 
@@ -18,6 +27,19 @@ class HMM:
         self.windows= windows
         self.method = method
         self.cache = CACHE2('hmm_cache.cache')
+        self.get_init()
+
+        logging.info("started")
+
+    def re_init(self, windows=None, method=None,ccylist=None):
+        if windows is not None:
+            self.windows =  windows
+        
+        if method is not None:
+            self.method = method
+        
+        if ccylist is not None:
+            self.ccylist= self.ccylist
         self.get_init()
 
     def get_init(self):
@@ -103,6 +125,8 @@ class HMM:
         # Example: check if result is in cache
         if cache_key in self.cache:
             return self.cache[cache_key]
+        else:
+            logging.info(f"cachekey data not found: {cache_key}")
     
         pairs_strength_diffs_shift = []
         for i in diffs_shift:
@@ -121,7 +145,8 @@ class HMM:
         self.cache[cache_key] = df
         return df
 
-    def model(self, df:pd.DataFrame, n_components=3, train_ratio=0.7, window_size=300, verbose=False, use_full=False, visualize=False) -> DenseHMM:
+    def model(self, df:pd.DataFrame, n_components=3, train_ratio=0.7, window_size=300, verbose=False, use_full=False, visualize=False,
+              model_only=False) -> DenseHMM:
         """plot hmm
 
         Args:
@@ -136,6 +161,20 @@ class HMM:
         """
 
 
+        param_dict = {
+            'ccy': sorted(self.ccylist),
+            'n_components': n_components,
+            'train_ratio': train_ratio,
+            'window_size': window_size,
+            'method' : self.method,
+        }
+        cache_key =  '_'.join(df.columns)  + str(param_dict)
+
+        if model_only:
+            if cache_key in self.cache:
+                model =  self.cache[cache_key]
+                return model
+
         df.dropna(inplace=True)
         X_full = df.values.astype(np.float64)  # shape: (n_days, 2 * n_assets)
         step_size = 1  # can increase to skip less overlapping windows
@@ -149,18 +188,10 @@ class HMM:
         X_rolling = np.stack(windows)  
         split_idx = int(len(rolling_index) *train_ratio)
 
-        param_dict = {
-            'ccy': sorted(self.ccylist),
-            'n_components': n_components,
-            'train_ratio': train_ratio,
-            'window_size': window_size,
-            'method' : self.method,
-        }
-
-        cache_key =  '_'.join(df.columns)  + str(param_dict)
         if cache_key in self.cache:
             model =  self.cache[cache_key]
         else:
+            logging.info(f"cachekey model not found: {cache_key}")
             model = DenseHMM([Normal() for _ in range(n_components)], max_iter=100, verbose=verbose)
             model.fit([X_rolling[:split_idx]])
             self.cache[cache_key] = model
@@ -298,10 +329,11 @@ class HMM:
         
         if cache_key in self.cache:
             data_cache = self.cache[cache_key] 
-            if pending:
-                return data_cache['pending']
-            else:
-                return data_cache['closed']
+            if data_cache:
+                if pending:
+                    return data_cache['pending']
+                else:
+                    return data_cache['closed']
 
 
         df =self.get_data(sorted(pairs), diffs_shift=diffs_shift, diffs=diffs, use_rank=use_rank, use_spread=use_spread)
@@ -325,6 +357,30 @@ class HMM:
             return data_cache['closed']
 
 
+
+    def validate_cache(self, pairs=['EUR', 'USD'], diffs_shift=[], diffs=[],use_rank=False, use_spread=False, 
+                    n_components=3, train_ratio=0.7, window_size=300, test_only=False,
+                    crossing_threshold=0.5, pending=False
+                    ) -> pd.DataFrame:
+        """This generates PnL for selected ccy
+
+        Args:
+            pairs (list, optional): list of currency. Defaults to ['EUR', 'USD'].
+            diffs_shift (list, optional): list of lags to measure strength momentum. Defaults to [].
+            diffs (list, optional): list of size of diff to measure strength momentum. Defaults to [].
+            use_rank (bool, optional): when use, add rank to fit HMM model. Defaults to False.
+            use_spread (bool, optional): when use, use spread instead of original ccy values. Defaults to False.
+            n_components (int, optional): number of HMM states. Defaults to 3.
+            train_ratio (float, optional): train ratio to fit HMM model. Defaults to 0.7.
+            window_size (int, optional): each batch size to fit HMM model. Defaults to 300.
+            test_only (bool, optional): To generate PnL for test only. Defaults to False.
+            crossing_threshold (float, optional): Entry signal, create entry when prob crosses threshold. Defaults to 0.5.
+
+        """
+        df =self.get_data(sorted(pairs), diffs_shift=diffs_shift, diffs=diffs, use_rank=use_rank, use_spread=use_spread)
+        m = self.model(df, n_components=n_components, train_ratio=train_ratio, window_size=window_size, model_only=True)
+
+        
     def extract_regime_trades(self, df_probs: pd.DataFrame, 
                             pair: str, 
                             threshold: float = 0.5,) -> list:
@@ -464,6 +520,33 @@ class HMM:
             return data_cache['pending']
         else:
             return data_cache['closed']
+
+
+    def validate_cache_datafile_and_model(self, diffs_shift=[], diffs=[],use_rank=False, use_spread=False, 
+                    n_components=3, train_ratio=0.7, window_size=300, test_only=False,
+                    crossing_threshold=0.5
+                    ) -> pd.DataFrame:
+        """This generates PnL for all ccy
+
+        Args:
+            pairs (list, optional): list of currency. Defaults to ['EUR', 'USD'].
+            diffs_shift (list, optional): list of lags to measure strength momentum. Defaults to [].
+            diffs (list, optional): list of size of diff to measure strength momentum. Defaults to [].
+            use_rank (bool, optional): when use, add rank to fit HMM model. Defaults to False.
+            use_spread (bool, optional): when use, use spread instead of original ccy values. Defaults to False.
+            n_components (int, optional): number of HMM states. Defaults to 3.
+            train_ratio (float, optional): train ratio to fit HMM model. Defaults to 0.7.
+            window_size (int, optional): each batch size to fit HMM model. Defaults to 300.
+            test_only (bool, optional): To generate PnL for test only. Defaults to False.
+            crossing_threshold (float, optional): Entry signal, create entry when prob crosses threshold. Defaults to 0.5.
+
+        """
+        if use_spread:
+            col = set([x[:6] for x in self.spreads.columns if 'timestamp' not in x])
+            for ccy in col:
+                self.validate_cache([ccy[:3], ccy[3:]], diffs_shift=diffs_shift, diffs=diffs,
+                             use_spread=use_spread, n_components=n_components, train_ratio=train_ratio,
+                             window_size=window_size, test_only=test_only, crossing_threshold=crossing_threshold)
 
 
     def get_pnl_all(self, diffs_shift=[], diffs=[],use_rank=False, use_spread=False, 
