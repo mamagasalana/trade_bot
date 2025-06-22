@@ -2,6 +2,9 @@ import os
 import pickle
 import logging
 import hashlib
+from functools import wraps
+import inspect
+
 
 class CACHE:
     def __init__(self, filename):
@@ -43,9 +46,10 @@ class CACHE:
 
 
 class CACHE2:
-    def __init__(self, version_name):
+    def __init__(self, version_name, optional_attrs=[]):
         self.folder = os.path.join('/home/ytee3/caches', version_name)
         os.makedirs(self.folder, exist_ok=True)
+        self.optional_attrs = optional_attrs
 
     def _hash_key(self, key):
         """Convert the key into a safe hashed filename."""
@@ -79,3 +83,54 @@ class CACHE2:
 
     def __contains__(self, key):
         return os.path.exists(self._file_path(key))
+    
+    def __call__(self, func):
+        sig = inspect.signature(func)          # capture once, outside wrapper
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Construct unique key from func name + args + kwargs
+            bound_self = args[0] 
+            key_elements = {
+                'func': func.__qualname__}
+            
+            bound = sig.bind_partial(*args, **kwargs)
+            bound.apply_defaults()
+
+            # add every non-self argument in deterministic name=value form
+            for name, value in bound.arguments.items():
+                if name != "self":
+                    key_elements[name]=value
+
+            for k in self.optional_attrs:
+                v = getattr(bound_self, k, '')
+                key_elements[k] = v
+
+            try:
+                # Best-effort serialization of the cache key
+                key_str = repr(key_elements)
+            except Exception as e:
+                logging.warning(f"[CACHE2] Failed to hash args: {e}")
+                return func(*args, **kwargs)
+
+            filename = self._file_path(key_str)
+
+            # Check cache hit
+            if os.path.exists(filename):
+                try:
+                    with open(filename, 'rb') as f:
+                        logging.debug(f"[CACHE2] Cache hit: {filename}")
+                        return pickle.load(f)
+                except Exception as e:
+                    logging.warning(f"[CACHE2] Failed to load cache: {e}")
+
+            # Compute and save result
+            result = func(*args, **kwargs)
+            try:
+                with open(filename, 'wb') as f:
+                    pickle.dump(result, f)
+                    logging.debug(f"[CACHE2] Cache saved: {filename}")
+            except Exception as e:
+                logging.warning(f"[CACHE2] Failed to save cache: {e}")
+            return result
+        return wrapper

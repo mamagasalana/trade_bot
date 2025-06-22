@@ -4,7 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import itertools
 from sklearn.preprocessing import StandardScaler
-
+from src.pattern.ccy_strength import CCY_STR, SMOOTHING_METHOD
+from src.csv.cache import CACHE2
 
 class CORR:
     def __init__(self):
@@ -111,3 +112,77 @@ class CORR:
         plt.title('correlation')
         fig.legend(loc="upper left", bbox_to_anchor=(1.02,1), bbox_transform=ax1.transAxes)
         plt.show()
+
+
+my_cache =  CACHE2('corr2.cache', ['windows', 'CURRENCIES', 'days_range'])
+
+class CORR2:
+    def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']):
+        self.days_range  = range(10, 1000, 10)
+        self.windows = range(10, 1000, 10)
+        self.CURRENCIES = ccys
+        self.c = CCY_STR(ccys)
+        self.cache = CACHE2('corr2.cache')
+
+        self.df = self.get_all_pairs()
+        self.all_pairs = self.df.columns
+
+        self.df2 = self.get_future()
+
+    @my_cache
+    def get_all_pairs(self):
+        return self.c.get_all_pairs()
+    
+    @my_cache
+    def _log_return_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = np.log(self.df[ccy].shift(-x) / self.df[ccy])
+            s.name = f"{ccy}_logreturn_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _log_range_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = np.log(self.df[ccy].rolling(window=x+1).max() / self.df[ccy].rolling(window=x+1).min()).shift(-x)
+            s.name = f"{ccy}_logrange_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _log_max_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = np.log(self.df[ccy].rolling(window=x+1).max().shift(-x) / self.df[ccy])
+            s.name = f"{ccy}_logbull_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _log_min_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = -np.log(self.df[ccy].rolling(window=x+1).min().shift(-x) / self.df[ccy])
+            s.name = f"{ccy}_logbear_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+
+    def get_future(self):
+        dfs = []
+        for ccy in self.all_pairs:
+            dfs.append(self._log_return_future(ccy))
+            dfs.append(self._log_range_future(ccy))
+            dfs.append(self._log_max_future(ccy))
+            dfs.append(self._log_min_future(ccy))
+        return pd.concat(dfs, axis=1)
+    
+
+if __name__ == '__main__':
+    a  = CORR2()
+    a.get_future()

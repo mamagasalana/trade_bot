@@ -379,7 +379,7 @@ class HMM:
         """
         df =self.get_data(sorted(pairs), diffs_shift=diffs_shift, diffs=diffs, use_rank=use_rank, use_spread=use_spread)
         m = self.model(df, n_components=n_components, train_ratio=train_ratio, window_size=window_size, model_only=True)
-
+        return df, m
         
     def extract_regime_trades(self, df_probs: pd.DataFrame, 
                             pair: str, 
@@ -541,13 +541,25 @@ class HMM:
             crossing_threshold (float, optional): Entry signal, create entry when prob crosses threshold. Defaults to 0.5.
 
         """
+        out = {}
         if use_spread:
             col = set([x[:6] for x in self.spreads.columns if 'timestamp' not in x])
             for ccy in col:
-                self.validate_cache([ccy[:3], ccy[3:]], diffs_shift=diffs_shift, diffs=diffs,
+                df, m  = self.validate_cache([ccy[:3], ccy[3:]], diffs_shift=diffs_shift, diffs=diffs,
                              use_spread=use_spread, n_components=n_components, train_ratio=train_ratio,
                              window_size=window_size, test_only=test_only, crossing_threshold=crossing_threshold)
 
+                
+                pnl = self.get_pnl([ccy[:3], ccy[3:]], diffs_shift=diffs_shift, diffs=diffs,
+                            use_spread=use_spread, n_components=n_components, train_ratio=train_ratio,
+                            window_size=window_size, test_only=test_only, crossing_threshold=crossing_threshold)
+
+                out[tuple([ccy[:3], ccy[3:]])] = {
+                    'df' : df,
+                    'model': m,
+                    'pnl': pnl
+                }        
+        return out
 
     def get_pnl_all(self, diffs_shift=[], diffs=[],use_rank=False, use_spread=False, 
                     n_components=3, train_ratio=0.7, window_size=300, test_only=False,
