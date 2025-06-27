@@ -182,7 +182,82 @@ class CORR2:
             dfs.append(self._log_min_future(ccy))
         return pd.concat(dfs, axis=1)
     
+    def get_feature(self):
+        dfs = []
+        for ccy in self.all_pairs:
+            dfs.append(self._feature_ma_diff(ccy))
+            dfs.append(self._feature_std(ccy))
+            dfs.append(self._feature_rsi(ccy))
+            dfs.append(self._feature_csi(ccy))
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _feature_ma_diff(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = self.df[ccy].rolling(window=x).mean() - self.df[ccy]
+            s.name = f"{ccy}_featmadiff_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _feature_std(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = self.df[ccy].rolling(window=x).std()
+            s.name = f"{ccy}_featstd_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    def compute_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
+        delta = prices.diff()
+
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        return rsi
+
+    @my_cache
+    def _feature_rsi(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = self.compute_rsi(self.df[ccy], x)
+            s.name = f"{ccy}_featrsi_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+    @my_cache
+    def all_csi(self, window):
+        return self.c.compute_csi(window=window)
+    
+    @my_cache
+    def _feature_csi(self, pair: str) -> pd.DataFrame:
+        dfs = []
+        ccy1, ccy2 = pair[:3], pair[3:]
+
+        for x in self.days_range:
+            # ytee 27 June 2025: we use x-1 instead of x to standardize the behavior of features.
+            # CSI is computed as price_t / price_t.shift(x), where price_t.shift(x) = price at (t - x),
+            # effectively covering the period [t - x, t].
+            # This aligns with a standard rolling window of size w, where w = x + 1,
+            # which also spans [t - w + 1, t] — for example, a 2-day rolling window covers [t - 1, t].
+            csi = self.all_csi(x-1)
+            s = csi[ccy1] - csi[ccy2]
+            s.name = f"{pair}_featcsi_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
 
 if __name__ == '__main__':
     a  = CORR2()
     a.get_future()
+    a.get_feature()
