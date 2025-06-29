@@ -117,18 +117,28 @@ class CORR:
 my_cache =  CACHE2('corr2.cache', ['windows', 'CURRENCIES', 'days_range'])
 
 class CORR2:
-    def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']):
-        self.days_range  = range(10, 1000, 10)
+    def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS'], simulation=False, force_reset=False):
+        
         self.windows = range(10, 1000, 10)
         self.CURRENCIES = ccys
         self.c = CCY_STR(ccys)
         self.cache = CACHE2('corr2.cache')
+        self.sim = SIMULATION()
+        self.simulation=simulation
+        self.force_reset =force_reset
+        
+        if simulation:    
+            self.force_reset= True
+            self.days_range  = range(10, 100, 10)
+            self.df = self.sim.df
+        else:
+            self.days_range  = range(10, 1000, 10)
+            self.df = self.get_all_pairs()
 
-        self.df = self.get_all_pairs()
-        self.all_pairs = self.df.columns
-
-        self.df2 = self.get_future()
-
+    @property
+    def all_pairs(self):
+        return self.df.columns
+    
     @my_cache
     def get_all_pairs(self):
         return self.c.get_all_pairs()
@@ -180,34 +190,50 @@ class CORR2:
             dfs.append(self._log_range_future(ccy))
             dfs.append(self._log_max_future(ccy))
             dfs.append(self._log_min_future(ccy))
-        return pd.concat(dfs, axis=1)
+        self.future = pd.concat(dfs, axis=1)
     
     def get_feature(self):
         dfs = []
         for ccy in self.all_pairs:
-            dfs.append(self._feature_ma_diff(ccy))
-            dfs.append(self._feature_std(ccy))
-            dfs.append(self._feature_rsi(ccy))
-            dfs.append(self._feature_csi(ccy))
-        return pd.concat(dfs, axis=1)
+            dfs.append(self._feature_ma_diff(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_std_oneday(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_std_xday(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_rsi(ccy, force_reset = self.force_reset))
+            if not self.simulation:
+                dfs.append(self._feature_csi(ccy))
+        self.features=  pd.concat(dfs, axis=1)
     
+    def feature(self, key):
+        keys = key.split(',')
+        return self.features[[ x for x in self.features.columns if all(k in x for k in keys) ]]
 
     @my_cache
-    def _feature_ma_diff(self, ccy: str) -> pd.DataFrame:
+    def _feature_ma_diff(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
-            s = self.df[ccy].rolling(window=x).mean() - self.df[ccy]
+            s = self.df[ccy] - self.df[ccy].rolling(window=x).mean()
             s.name = f"{ccy}_featmadiff_{x}d"
             dfs.append(s)
         return pd.concat(dfs, axis=1)
     
 
     @my_cache
-    def _feature_std(self, ccy: str) -> pd.DataFrame:
+    def _feature_std_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        logret = np.log(self.df[ccy] / self.df[ccy].shift(1))
+        for x in self.days_range:
+            s = logret.rolling(window=x).std()
+            s.name = f"{ccy}_featstd1_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+    @my_cache
+    def _feature_std_xday(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
-            s = self.df[ccy].rolling(window=x).std()
-            s.name = f"{ccy}_featstd_{x}d"
+            logret = np.log(self.df[ccy] / self.df[ccy].shift(x-1))
+            s = logret.rolling(window=x).std()
+            s.name = f"{ccy}_featstdx_{x}d"
             dfs.append(s)
         return pd.concat(dfs, axis=1)
     
@@ -227,7 +253,7 @@ class CORR2:
         return rsi
 
     @my_cache
-    def _feature_rsi(self, ccy: str) -> pd.DataFrame:
+    def _feature_rsi(self, ccy: str, force_reset = False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
             s = self.compute_rsi(self.df[ccy], x)
@@ -255,6 +281,32 @@ class CORR2:
             s.name = f"{pair}_featcsi_{x}d"
             dfs.append(s)
         return pd.concat(dfs, axis=1)
+
+class SIMULATION:
+    def __init__(self):
+        n = 100
+        t = np.arange(n)
+
+        # Scenario 1: Trending slowly (no noise)
+        trend1 = np.linspace(0, 10, n)
+
+        # Scenario 2: Trending fast (no noise)
+        trend2 = np.linspace(0, 20, n)
+
+        # Scenario 3: Ranging zigzag with more frequent reversals
+        num_zigs = 10
+        points_per_zig = n // (2 * num_zigs)
+        zig = np.linspace(0, 10, points_per_zig)
+        zag = np.linspace(10, 0, points_per_zig)
+        full_cycle = np.concatenate([zig, zag])
+        range_market = np.tile(full_cycle, num_zigs)[:n]
+
+        self.df = pd.DataFrame({
+            'Trend_Slow': trend1,
+            'Trend_Fast': trend2,
+            'Range': range_market
+        })
+        self.df += 5
 
 
 if __name__ == '__main__':

@@ -97,10 +97,13 @@ class CACHE2:
             bound = sig.bind_partial(*args, **kwargs)
             bound.apply_defaults()
 
+            force_reset = False
             # add every non-self argument in deterministic name=value form
             for name, value in bound.arguments.items():
                 if name != "self":
                     key_elements[name]=value
+                if name == 'force_reset':
+                    force_reset = value
 
             for k in self.optional_attrs:
                 v = getattr(bound_self, k, '')
@@ -116,7 +119,7 @@ class CACHE2:
             filename = self._file_path(key_str)
 
             # Check cache hit
-            if os.path.exists(filename):
+            if os.path.exists(filename) and not force_reset:
                 try:
                     with open(filename, 'rb') as f:
                         logging.debug(f"[CACHE2] Cache hit: {filename}")
