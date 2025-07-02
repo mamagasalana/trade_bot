@@ -195,7 +195,9 @@ class CORR2:
     def get_feature(self):
         dfs = []
         for ccy in self.all_pairs:
-            dfs.append(self._feature_ma_diff(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_meanret_oneday(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_meanret_xday(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_range(ccy, force_reset =  self.force_reset))
             dfs.append(self._feature_std_oneday(ccy, force_reset = self.force_reset))
             dfs.append(self._feature_std_xday(ccy, force_reset = self.force_reset))
             dfs.append(self._feature_rsi(ccy, force_reset = self.force_reset))
@@ -207,15 +209,46 @@ class CORR2:
         keys = key.split(',')
         return self.features[[ x for x in self.features.columns if all(k in x for k in keys) ]]
 
+    def demo(self, keywords=[]):
+        for col in set([x.split('_')[1] for x in self.features.columns]):
+            plt.figure()
+            ax = self.feature(f"{','.join(([col] + keywords))}").plot()
+            ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
+            plt.title(f'{col}')
+
+
     @my_cache
-    def _feature_ma_diff(self, ccy: str, force_reset=False) -> pd.DataFrame:
+    def _feature_range(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
-            s = self.df[ccy] - self.df[ccy].rolling(window=x).mean()
-            s.name = f"{ccy}_featmadiff_{x}d"
+            max = self.df[ccy].rolling(window=x).max()
+            min = self.df[ccy].rolling(window=x).min()
+            s = np.log(max / min)
+            s.name = f"{ccy}_featrange_{x}d"
             dfs.append(s)
         return pd.concat(dfs, axis=1)
-    
+
+
+    @my_cache
+    def _feature_meanret_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        logret = np.log(self.df[ccy] / self.df[ccy].shift(1))
+        for x in self.days_range:
+            s = logret.rolling(window=x).mean()
+            s.name = f"{ccy}_featmean1_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+    @my_cache
+    def _feature_meanret_xday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        
+        for x in self.days_range:
+            logret = np.log(self.df[ccy] / self.df[ccy].shift(x-1))
+            s = logret.rolling(window=x).mean()
+            s.name = f"{ccy}_featmeanx_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
 
     @my_cache
     def _feature_std_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
@@ -302,8 +335,8 @@ class SIMULATION:
         range_market = np.tile(full_cycle, num_zigs)[:n]
 
         self.df = pd.DataFrame({
-            'Trend_Slow': trend1,
-            'Trend_Fast': trend2,
+            'Slow': trend1,
+            'Fast': trend2,
             'Range': range_market
         })
         self.df += 5
