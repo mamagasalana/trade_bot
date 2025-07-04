@@ -201,10 +201,26 @@ class CORR2:
             dfs.append(self._feature_std_oneday(ccy, force_reset = self.force_reset))
             dfs.append(self._feature_std_xday(ccy, force_reset = self.force_reset))
             dfs.append(self._feature_rsi(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_hurst(ccy, force_reset = self.force_reset))
             if not self.simulation:
                 dfs.append(self._feature_csi(ccy))
         self.features=  pd.concat(dfs, axis=1)
     
+    def apply_cross_sectional(self):
+        self.features2 = self.features.copy()
+        unique_cols = set([ '_'.join(x.split('_')[1:]) for x in self.features2.columns])
+        for col in unique_cols:
+            if 'featrsi' in col:
+                continue
+            if 'feathurst' in col:
+                continue
+            selected_cols = [x for x in self.features2.columns if col in x]
+            self.features2[selected_cols] = (
+                self.features2[selected_cols]
+                .sub(self.features2[selected_cols].mean(axis=1), axis=0)
+                .div(self.features2[selected_cols].std(axis=1, ddof=0), axis=0)
+            )
+            
     def feature(self, key):
         keys = key.split(',')
         return self.features[[ x for x in self.features.columns if all(k in x for k in keys) ]]
@@ -216,6 +232,31 @@ class CORR2:
             ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
             plt.title(f'{col}')
 
+
+    @my_cache
+    def _feature_hurst(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        def hurst_rs(series: pd.Series) -> float:
+            """Compute the Hurst exponent using rescaled range (R/S) method"""
+            series = series.dropna()
+            if len(series) < 20:
+                return np.nan
+
+            mean = series.mean()
+            dev = series - mean
+            cum_dev = dev.cumsum()
+            R = cum_dev.max() - cum_dev.min()
+            S = series.std()
+
+            if S == 0:
+                return np.nan
+            return np.log(R / S)
+
+        dfs = []
+        for x in self.days_range:
+            s = self.df[ccy].rolling(window=x).apply(hurst_rs, raw=False) / np.log(x)
+            s.name = f"{ccy}_feathurst_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
 
     @my_cache
     def _feature_range(self, ccy: str, force_reset=False) -> pd.DataFrame:
