@@ -221,14 +221,19 @@ class CORR2:
                 .div(self.features2[selected_cols].std(axis=1, ddof=0), axis=0)
             )
             
-    def feature(self, key):
+    def feature(self, key, mode=1):
         keys = key.split(',')
-        return self.features[[ x for x in self.features.columns if all(k in x for k in keys) ]]
+        if mode ==1:
+            return self.features[[ x for x in self.features.columns if all(k in x for k in keys) ]]
+        else:
+            return self.features2[[ x for x in self.features2.columns if all(k in x for k in keys) ]]
 
-    def demo(self, keywords=[]):
+
+    def demo(self, keywords=[], mode=1):
+
         for col in set([x.split('_')[1] for x in self.features.columns]):
-            plt.figure()
-            ax = self.feature(f"{','.join(([col] + keywords))}").plot()
+            plt.figure()            
+            ax = self.feature(f"{','.join(([col] + keywords))}", mode=mode).plot()
             ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
             plt.title(f'{col}')
 
