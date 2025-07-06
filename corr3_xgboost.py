@@ -4,11 +4,12 @@ from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
-from src.pattern.correlation import CORR2  # Make sure this matches your file name
+from src.pattern.correlation import CORR3  # Make sure this matches your file name
 
 # Step 1: Initialize and load data
-ccys = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
-a = CORR2(ccys)
+# ccys = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR',]
+ccys = ['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS']
+a = CORR3(ccys)
 a.get_feature()
 a.get_future()
 a.apply_cross_sectional()
@@ -56,16 +57,17 @@ y_pred = model.predict(X_test)
 mse = mean_squared_error(y_test, y_pred)
 print(f'idx: {idx}, MSE: {mse:.6f}')
 
+# Step 6: Feature Importance
+importances = pd.Series(model.feature_importances_, index=X_train.columns).sort_values(ascending=False)
+print("\nTop 10 Important Features:")
+print(importances.head(10))
+
 # Step 5: Plot
 plt.figure(figsize=(12, 4))
-plt.plot(y_test.index, y_test, label='Actual')
-plt.plot(y_test.index, y_pred, label='Predicted')
+plt.plot(y_test.index, y_test, label='Actual', alpha=0.5)
+plt.plot(y_test.index, y_pred, label='Predicted', alpha=0.5)
 plt.title(f'XGBoost Prediction of {target} (MSE: {mse:.6f})')
 plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Step 6: Feature Importance
-importances = pd.Series(model.feature_importances_, index=X_train.columns).sort_values(ascending=False)
-print("\nTop 10 Important Features:")
-print(importances.head(10))

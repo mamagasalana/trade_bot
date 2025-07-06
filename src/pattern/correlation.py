@@ -243,8 +243,6 @@ class CORR2:
         def hurst_rs(series: pd.Series) -> float:
             """Compute the Hurst exponent using rescaled range (R/S) method"""
             series = series.dropna()
-            if len(series) < 20:
-                return np.nan
 
             mean = series.mean()
             dev = series - mean
@@ -386,6 +384,259 @@ class SIMULATION:
             'Range': range_market
         })
         self.df += 5
+
+class CORR3:
+    def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS'], simulation=False, force_reset=False):
+        
+        self.windows = range(10, 1000, 10)
+        self.CURRENCIES = ccys
+        self.c = CCY_STR(ccys)
+        self.cache = CACHE2('corr3.cache')
+        self.sim = SIMULATION()
+        self.simulation=simulation
+        self.force_reset =force_reset
+        
+        if simulation:    
+            self.force_reset= True
+            self.days_range  = range(10, 100, 10)
+            self.df = self.sim.df
+        else:
+            self.days_range  = range(10, 1000, 10)
+            self.df = self.get_all_pairs(force_reset)
+
+    @property
+    def all_pairs(self):
+        return self.df.columns
+    
+    @my_cache
+    def get_all_pairs(self, force_reset=False):
+        df = self.c.compute_csi()
+        dfs = []
+        for col in df:
+            cumulative_log_return = np.cumsum(df[col])
+            start_price = 100
+            price_index = start_price * np.exp(cumulative_log_return)
+            dfs.append(price_index)
+
+        return pd.concat(dfs, axis=1)
+        
+    
+    @my_cache
+    def _log_return_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = np.log(self.df[ccy].shift(-x) / self.df[ccy])
+            s.name = f"{ccy}_logreturn_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _log_range_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = np.log(self.df[ccy].rolling(window=x+1).max() / self.df[ccy].rolling(window=x+1).min()).shift(-x)
+            s.name = f"{ccy}_logrange_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _log_max_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = np.log(self.df[ccy].rolling(window=x+1).max().shift(-x) / self.df[ccy])
+            s.name = f"{ccy}_logbull_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    @my_cache
+    def _log_min_future(self, ccy: str) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = -np.log(self.df[ccy].rolling(window=x+1).min().shift(-x) / self.df[ccy])
+            s.name = f"{ccy}_logbear_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+
+    def get_future(self):
+        dfs = []
+        for ccy in self.all_pairs:
+            dfs.append(self._log_return_future(ccy))
+            dfs.append(self._log_range_future(ccy))
+            dfs.append(self._log_max_future(ccy))
+            dfs.append(self._log_min_future(ccy))
+        self.future = pd.concat(dfs, axis=1)
+    
+    def get_feature(self):
+        dfs = []
+        for ccy in self.all_pairs:
+            dfs.append(self._feature_meanret_oneday(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_meanret_xday(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_range(ccy, force_reset =  self.force_reset))
+            dfs.append(self._feature_std_oneday(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_std_xday(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_rsi(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_hurst(ccy, force_reset = self.force_reset))
+            dfs.append(self._feature_csi(ccy))
+        self.features=  pd.concat(dfs, axis=1)
+    
+    def apply_cross_sectional(self):
+        self.features2 = self.features.copy()
+        unique_cols = set([ '_'.join(x.split('_')[1:]) for x in self.features2.columns])
+        for col in unique_cols:
+            if 'featrsi' in col:
+                continue
+            if 'feathurst' in col:
+                continue
+            selected_cols = [x for x in self.features2.columns if col in x]
+            self.features2[selected_cols] = (
+                self.features2[selected_cols]
+                .sub(self.features2[selected_cols].mean(axis=1), axis=0)
+                .div(self.features2[selected_cols].std(axis=1, ddof=0), axis=0)
+            )
+            
+    def feature(self, key, mode=1):
+        keys = key.split(',')
+        if mode ==1:
+            return self.features[[ x for x in self.features.columns if all(k in x for k in keys) ]]
+        else:
+            return self.features2[[ x for x in self.features2.columns if all(k in x for k in keys) ]]
+
+
+    def demo(self, keywords=[], mode=1):
+
+        for col in set([x.split('_')[1] for x in self.features.columns]):
+            plt.figure()            
+            ax = self.feature(f"{','.join(([col] + keywords))}", mode=mode).plot()
+            ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
+            plt.title(f'{col}')
+
+
+    @my_cache
+    def _feature_hurst(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        def hurst_rs(series: pd.Series) -> float:
+            """Compute the Hurst exponent using rescaled range (R/S) method"""
+            series = series.dropna()
+            if len(series) < 20:
+                return np.nan
+
+            mean = series.mean()
+            dev = series - mean
+            cum_dev = dev.cumsum()
+            R = cum_dev.max() - cum_dev.min()
+            S = series.std()
+
+            if S == 0:
+                return np.nan
+            return np.log(R / S)
+
+        dfs = []
+        for x in self.days_range:
+            s = self.df[ccy].rolling(window=x).apply(hurst_rs, raw=False) / np.log(x)
+            s.name = f"{ccy}_feathurst_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+    @my_cache
+    def _feature_range(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            max = self.df[ccy].rolling(window=x).max()
+            min = self.df[ccy].rolling(window=x).min()
+            s = np.log(max / min)
+            s.name = f"{ccy}_featrange_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+
+    @my_cache
+    def _feature_meanret_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        logret = np.log(self.df[ccy] / self.df[ccy].shift(1))
+        for x in self.days_range:
+            s = logret.rolling(window=x).mean()
+            s.name = f"{ccy}_featmean1_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+    @my_cache
+    def _feature_meanret_xday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        
+        for x in self.days_range:
+            logret = np.log(self.df[ccy] / self.df[ccy].shift(x-1))
+            s = logret.rolling(window=x).mean()
+            s.name = f"{ccy}_featmeanx_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+
+    @my_cache
+    def _feature_std_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        logret = np.log(self.df[ccy] / self.df[ccy].shift(1))
+        for x in self.days_range:
+            s = logret.rolling(window=x).std()
+            s.name = f"{ccy}_featstd1_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+    @my_cache
+    def _feature_std_xday(self, ccy: str, force_reset=False) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            logret = np.log(self.df[ccy] / self.df[ccy].shift(x-1))
+            s = logret.rolling(window=x).std()
+            s.name = f"{ccy}_featstdx_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+
+    def compute_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
+        delta = prices.diff()
+
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        return rsi
+
+    @my_cache
+    def _feature_rsi(self, ccy: str, force_reset = False) -> pd.DataFrame:
+        dfs = []
+        for x in self.days_range:
+            s = self.compute_rsi(self.df[ccy], x)
+            s.name = f"{ccy}_featrsi_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
+    
+    @my_cache
+    def all_csi(self, window):
+        return self.c.compute_csi(window=window)
+    
+    @my_cache
+    def _feature_csi(self, pair: str) -> pd.DataFrame:
+        
+        dfs = []
+        for x in self.days_range:
+            
+            # ytee 27 June 2025: we use x-1 instead of x to standardize the behavior of features.
+            # CSI is computed as price_t / price_t.shift(x), where price_t.shift(x) = price at (t - x),
+            # effectively covering the period [t - x, t].
+            # This aligns with a standard rolling window of size w, where w = x + 1,
+            # which also spans [t - w + 1, t] — for example, a 2-day rolling window covers [t - 1, t].
+            csi = self.all_csi(x-1)
+            s = csi[pair]
+            s.name = f"{pair}_featcsi_{x}d"
+            dfs.append(s)
+        return pd.concat(dfs, axis=1)
 
 
 if __name__ == '__main__':
