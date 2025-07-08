@@ -16,11 +16,11 @@ a.apply_cross_sectional()
 
 
 #Step2: flatten, train test split
-idx = 20
+idx = 10
 mode = 2
 selected_interval = f'_{idx}d'
 target ='logreturn' + selected_interval
-X = a.feature(selected_interval, mode=mode).copy()
+X = a.feature('_', mode=mode).copy() # get all feature
 target_cols = [col for col in a.future.columns if col.endswith(target)]
 target_df = a.future[target_cols].copy()
 Xy = pd.concat([X, target_df], axis=1)
@@ -69,5 +69,7 @@ plt.plot(y_test.index, y_pred, label='Predicted', alpha=0.5)
 plt.title(f'XGBoost Prediction of {target} (MSE: {mse:.6f})')
 plt.legend()
 plt.tight_layout()
-plt.show()
+# plt.show()
 
+plt.savefig(f'corr_chart.png', bbox_inches='tight')
+plt.close()

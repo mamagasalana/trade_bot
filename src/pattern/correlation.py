@@ -388,7 +388,7 @@ class SIMULATION:
 class CORR3:
     def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS'], simulation=False, force_reset=False):
         
-        self.windows = range(10, 1000, 10)
+        self.windows = range(10, 500, 10)
         self.CURRENCIES = ccys
         self.c = CCY_STR(ccys)
         self.cache = CACHE2('corr3.cache')
@@ -401,7 +401,7 @@ class CORR3:
             self.days_range  = range(10, 100, 10)
             self.df = self.sim.df
         else:
-            self.days_range  = range(10, 1000, 10)
+            self.days_range  = range(10, 500, 10)
             self.df = self.get_all_pairs(force_reset)
 
     @property
@@ -520,8 +520,6 @@ class CORR3:
         def hurst_rs(series: pd.Series) -> float:
             """Compute the Hurst exponent using rescaled range (R/S) method"""
             series = series.dropna()
-            if len(series) < 20:
-                return np.nan
 
             mean = series.mean()
             dev = series - mean
@@ -600,13 +598,13 @@ class CORR3:
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
 
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
+        avg_gain = gain.rolling(window=period, min_periods= period).mean()
+        avg_loss = loss.rolling(window=period, min_periods= period).mean()
 
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
 
-        return rsi
+        return rsi/100
 
     @my_cache
     def _feature_rsi(self, ccy: str, force_reset = False) -> pd.DataFrame:
