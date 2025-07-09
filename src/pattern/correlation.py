@@ -122,7 +122,6 @@ class CORR2:
         self.windows = range(10, 1000, 10)
         self.CURRENCIES = ccys
         self.c = CCY_STR(ccys)
-        self.cache = CACHE2('corr2.cache')
         self.sim = SIMULATION()
         self.simulation=simulation
         self.force_reset =force_reset
@@ -385,13 +384,14 @@ class SIMULATION:
         })
         self.df += 5
 
+my_cache3 =  CACHE2('corr3.cache', ['windows', 'CURRENCIES', 'days_range'])
+
 class CORR3:
     def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS'], simulation=False, force_reset=False):
         
         self.windows = range(10, 500, 10)
         self.CURRENCIES = ccys
         self.c = CCY_STR(ccys)
-        self.cache = CACHE2('corr3.cache')
         self.sim = SIMULATION()
         self.simulation=simulation
         self.force_reset =force_reset
@@ -408,9 +408,9 @@ class CORR3:
     def all_pairs(self):
         return self.df.columns
     
-    @my_cache
+    @my_cache3
     def get_all_pairs(self, force_reset=False):
-        df = self.c.compute_csi()
+        df = self.c.compute_csi(window=1)
         dfs = []
         for col in df:
             cumulative_log_return = np.cumsum(df[col])
@@ -421,7 +421,7 @@ class CORR3:
         return pd.concat(dfs, axis=1)
         
     
-    @my_cache
+    @my_cache3
     def _log_return_future(self, ccy: str) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -431,7 +431,7 @@ class CORR3:
         return pd.concat(dfs, axis=1)
     
 
-    @my_cache
+    @my_cache3
     def _log_range_future(self, ccy: str) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -441,7 +441,7 @@ class CORR3:
         return pd.concat(dfs, axis=1)
     
 
-    @my_cache
+    @my_cache3
     def _log_max_future(self, ccy: str) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -451,7 +451,7 @@ class CORR3:
         return pd.concat(dfs, axis=1)
     
 
-    @my_cache
+    @my_cache3
     def _log_min_future(self, ccy: str) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -515,7 +515,7 @@ class CORR3:
             plt.title(f'{col}')
 
 
-    @my_cache
+    @my_cache3
     def _feature_hurst(self, ccy: str, force_reset=False) -> pd.DataFrame:
         def hurst_rs(series: pd.Series) -> float:
             """Compute the Hurst exponent using rescaled range (R/S) method"""
@@ -538,7 +538,7 @@ class CORR3:
             dfs.append(s)
         return pd.concat(dfs, axis=1)
 
-    @my_cache
+    @my_cache3
     def _feature_range(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -550,7 +550,7 @@ class CORR3:
         return pd.concat(dfs, axis=1)
 
 
-    @my_cache
+    @my_cache3
     def _feature_meanret_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         logret = np.log(self.df[ccy] / self.df[ccy].shift(1))
@@ -560,7 +560,7 @@ class CORR3:
             dfs.append(s)
         return pd.concat(dfs, axis=1)
 
-    @my_cache
+    @my_cache3
     def _feature_meanret_xday(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         
@@ -571,7 +571,7 @@ class CORR3:
             dfs.append(s)
         return pd.concat(dfs, axis=1)
 
-    @my_cache
+    @my_cache3
     def _feature_std_oneday(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         logret = np.log(self.df[ccy] / self.df[ccy].shift(1))
@@ -581,7 +581,7 @@ class CORR3:
             dfs.append(s)
         return pd.concat(dfs, axis=1)
     
-    @my_cache
+    @my_cache3
     def _feature_std_xday(self, ccy: str, force_reset=False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -606,7 +606,7 @@ class CORR3:
 
         return rsi/100
 
-    @my_cache
+    @my_cache3
     def _feature_rsi(self, ccy: str, force_reset = False) -> pd.DataFrame:
         dfs = []
         for x in self.days_range:
@@ -615,11 +615,11 @@ class CORR3:
             dfs.append(s)
         return pd.concat(dfs, axis=1)
     
-    @my_cache
+    @my_cache3
     def all_csi(self, window):
         return self.c.compute_csi(window=window)
     
-    @my_cache
+    @my_cache3
     def _feature_csi(self, pair: str) -> pd.DataFrame:
         
         dfs = []
