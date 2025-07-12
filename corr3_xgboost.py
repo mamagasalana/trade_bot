@@ -16,10 +16,10 @@ a.apply_cross_sectional()
 
 
 #Step2: flatten, train test split
-idx = 10
+idx = 5
 mode = 2
 selected_interval = f'_{idx}d'
-target ='logreturn' + selected_interval
+target ='futrsi' + selected_interval
 X = a.feature('_', mode=mode).copy() # get all feature
 target_cols = [col for col in a.future.columns if col.endswith(target)]
 target_df = a.future[target_cols].copy()
@@ -71,5 +71,5 @@ plt.legend()
 plt.tight_layout()
 # plt.show()
 
-plt.savefig(f'corr_chart.png', bbox_inches='tight')
+plt.savefig(f'corr_chart_{idx}.png', bbox_inches='tight')
 plt.close()
