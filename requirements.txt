@@ -20,3 +20,4 @@ nasdaq-data-link
 python-dotenv
 pykalman
 pomegranate
+sodapy
