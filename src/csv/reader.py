@@ -12,6 +12,8 @@ from  src.maps.economic_classification import *
 from src.pattern.functions import parse_format
 import datetime
 from src.csv.fred import FRED
+from src.csv.cache import CACHE2
+
 
 class reader:
     def __init__(self, ccy=None):
@@ -268,6 +270,26 @@ class reader:
         # Display legend for the secondary y-axis
         ax_secondary.legend(loc='upper left')
 
+
+my_cache = CACHE2('reader2.cache')
+class reader2:
+    def __init__(self):
+
+        ccys = [re.findall(r'.*/(.*)\.csv', f)[0] for f in glob.glob('files/ccy/*')]
+        self.dfs = {}
+        for ccy in ccys:
+            self.dfs[ccy] = self.get_file(ccy)
+
+    @my_cache
+    def get_file(self, ccy):
+        fx= pd.read_csv(f'files/ccy/{ccy}.csv',  names =['dt', 'tm', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        fx['Date'] = pd.to_datetime(fx['dt'] + ' ' + fx['tm'])
+        fx.replace([np.inf, -np.inf], np.nan, inplace=True)
+        fx.dropna(inplace=True)
+        fx.reset_index(inplace=True)
+        return fx.set_index('Date')[['Open', 'High', 'Low', 'Close', 'Volume']]
+
+    
 if __name__ == '__main__':
 
     from scipy.signal import find_peaks
