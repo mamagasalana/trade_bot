@@ -5,6 +5,7 @@ from src.csv.reader  import reader2
 
 import mplfinance as mpf
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 r = reader2()
 
@@ -12,7 +13,12 @@ my_cache =  CACHE2('range_market.cache')
 
 class MY_RANGE:
     def __init__(self):
-        pass
+        self.dfs = {}
+
+    def get_file(self, ccy, tf):
+        if not (ccy, tf) in self.dfs:
+            self.dfs[(ccy, tf)]  = r.get_file_tf(ccy, tf)
+        return self.dfs[(ccy, tf)]
 
     def __fill_between_trues(self, mask: np.ndarray) -> np.ndarray:
         """
@@ -29,7 +35,7 @@ class MY_RANGE:
         return filled
 
 
-    def compute_emptiness_from_barwise_overlap(self, lows, highs, boundary_min, boundary_max):
+    def __compute_emptiness_from_barwise_overlap(self, lows, highs, boundary_min, boundary_max):
         """
         Compute per-bar overlap with boundary band, normalize by bar size,
         then return 1 - mean(coverage).
@@ -78,23 +84,25 @@ class MY_RANGE:
 
         coverages_upper = np.full_like(lows, np.nan, dtype=np.float64)
         coverages_upper[both] = boundary_max
-        coverages_upper[only_r] = boundary_max
-        coverages_upper[only_s] = highs[only_s]
+        coverages_upper[only_r] =  boundary_max
+        coverages_upper[only_s] = np.maximum(boundary_min, highs[only_s])
 
         coverages_lower = np.full_like(lows, np.nan, dtype=np.float64)
         coverages_lower[both] = boundary_min
-        coverages_lower[only_r] = lows[only_r]
+        coverages_lower[only_r] = np.minimum(boundary_max, lows[only_r])
         coverages_lower[only_s] = boundary_min
 
         mean_coverage = np.mean(coverages)
         emptiness = 1.0 - mean_coverage
         return emptiness,(coverages_upper, coverages_lower)
 
-    def widest_band_with_target_emptiness(self, df_slice, threshold=0.15, tolerance=0.005, visualize=False):
+    @my_cache
+    def get_band(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False):
         """
         Find widest price band [a, b] such that |emptiness - threshold| < tolerance.
         Returns: (emptiness, (a, b))
         """
+        df_slice = self.get_file(ccy, tf).iloc[idx_start:idx_end]
         lows = df_slice['Low'].values
         highs = df_slice['High'].values
         prices = np.unique(np.concatenate([lows, highs]))
@@ -110,7 +118,7 @@ class MY_RANGE:
             for j in range(i + 1, len(prices)):
                 a = prices[i]
                 b = prices[j]
-                emptiness, coverage = self.compute_emptiness_from_barwise_overlap(lows, highs, a, b)
+                emptiness, coverage = self.__compute_emptiness_from_barwise_overlap(lows, highs, a, b)
                 if emptiness == 1:
                     continue
                 
@@ -123,7 +131,13 @@ class MY_RANGE:
                         best_emptiness = emptiness
                         best_coverage = coverage
 
-        if visualize and best_coverage:
+        return best_emptiness, best_band, best_coverage
+
+
+    def view_band(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False):
+        df_slice = self.get_file(ccy, tf).iloc[idx_start:idx_end]
+        best_emptiness, best_band, best_coverage  = self.get_band(ccy, tf, idx_start, idx_end, threshold, tolerance, force_reset)
+        if best_coverage:
             fig, axlist = mpf.plot(
                 df_slice,
                 type='candle',
@@ -149,4 +163,24 @@ class MY_RANGE:
             ax.legend()
             fig.tight_layout()
             plt.show()
-        return best_emptiness, best_band, ret
+
+    def get_band_by_batch(self,  ccy, tf, result=False, force_reset=False):
+        df = self.get_file(ccy, tf)
+        
+        combinations = [
+            (idx_start, idx_end, threshold / 10)
+            for idx_start in range(0, len(df), 50)
+            for idx_end in range(idx_start, idx_start + 500, 50)
+            for threshold in range(1, 5)
+        ]
+
+        ret = []
+        for idx_start, idx_end, threshold in tqdm(combinations):
+            # just cache data?
+            best_emptiness, best_band, _ = self.get_band(ccy, tf, idx_start, idx_end, threshold, 0.05, force_reset=force_reset)
+            if result:
+                ret.append([ccy, tf, idx_start, idx_end, best_emptiness, best_band[0], best_band[1]])
+
+        if result:
+            return ret
+        

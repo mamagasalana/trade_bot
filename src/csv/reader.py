@@ -274,11 +274,11 @@ class reader:
 my_cache = CACHE2('reader2.cache')
 class reader2:
     def __init__(self):
-
-        ccys = [re.findall(r'.*/(.*)\.csv', f)[0] for f in glob.glob('files/ccy/*')]
-        self.dfs = {}
-        for ccy in ccys:
-            self.dfs[ccy] = self.get_file(ccy)
+        pass
+        # ccys = [re.findall(r'.*/(.*)\.csv', f)[0] for f in glob.glob('files/ccy/*')]
+        # self.dfs = {}
+        # for ccy in ccys:
+        #     self.dfs[ccy] = self.get_file(ccy)
 
     @my_cache
     def get_file(self, ccy):
@@ -289,7 +289,18 @@ class reader2:
         fx.reset_index(inplace=True)
         return fx.set_index('Date')[['Open', 'High', 'Low', 'Close', 'Volume']]
 
-    
+    @my_cache
+    def get_file_tf(self, ccy, tf):        
+        """
+        # '15T': 15-minute intervals.
+        # '30T': 30-minute intervals.
+        # '4H': 4-hour intervals.
+        # '1D': : Daily intervals.
+        """
+        fx = self.get_file(ccy)
+        return fx.resample(tf).agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+
+
 if __name__ == '__main__':
 
     from scipy.signal import find_peaks
