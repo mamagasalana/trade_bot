@@ -21,3 +21,4 @@ python-dotenv
 pykalman
 pomegranate
 sodapy
+moviepy

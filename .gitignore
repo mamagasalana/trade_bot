@@ -16,3 +16,5 @@ test.py
 config.json
 *.pkl
 *.log
+**/*.egg-info/*
+**/dist/*
