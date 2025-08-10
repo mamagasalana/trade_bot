@@ -4,14 +4,17 @@ import pandas as pd
 from src.csv.cache import CACHE2
 from src.csv.reader  import reader2
 
+import shlex
+import matplotlib
+matplotlib.use('Agg')
 import mplfinance as mpf
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
-from moviepy import ImageSequenceClip
+import subprocess
 import range_market as rngmkt
 from concurrent.futures import ThreadPoolExecutor
-
+import gc
 
 r = reader2()
 
@@ -166,23 +169,29 @@ class MY_RANGE:
     #     return best_emptiness, best_band, best_coverage
 
     def view_video(self, ccy, tf, interval, threshold=0.15, tolerance=0.005):
-        os.makedirs("frames", exist_ok=True)
-        df = self.get_file(ccy, tf)
-        for idx_start in tqdm(range(0, len(df), 1)):
-            spath = 'frames/%s.png' % idx_start
-            self.view_band(ccy=ccy, tf=tf, idx_start=idx_start, idx_end=idx_start+interval, threshold=threshold, tolerance=tolerance, save_path=spath)
-    
-        frame_paths = sorted([f"frames/{f}" for f in os.listdir("frames") if f.endswith(".png")])
-        clip = ImageSequenceClip(frame_paths, fps=10)
-        clip.write_videofile("%s_%s_%s_%s.mp4" % (ccy, tf, interval, threshold), codec='libx264', fps=10)
+        folder = "frames_%s_%s_%s_%s" % (ccy, tf, interval, threshold)
+        os.makedirs(folder, exist_ok=True)
 
+        df = self.get_file(ccy, tf)  
+        for idx_start in tqdm(range(0, len(df), 1)):
+            spath = f"{folder}/{idx_start:06d}.png"
+            if not os.path.exists(spath):
+                self.view_band(ccy=ccy, tf=tf, idx_start=idx_start, idx_end=idx_start+interval, threshold=threshold, tolerance=tolerance, save_path=spath)
+            # if idx_start % 1000 == 0:
+            #     gc.collect()
+
+        fps = 10
+
+        outfile = f"{ccy}_{tf}_{interval}_{threshold}.mp4"
+        cmd = f"ffmpeg -y -framerate {fps} -i {folder}/%06d.png -c:v libx264 -pix_fmt yuv420p {shlex.quote(outfile)}"
+        subprocess.run(cmd, shell=True, check=True)
 
     def view_band(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False, save_path=None):
         sz= idx_end - idx_start
         df = self.get_file(ccy, tf)
         df_slice_wide = df.iloc[max(0, idx_start-sz):min(df.shape[0], idx_end+sz*4)]
         df_slice = df.iloc[idx_start:idx_end]
-        best_emptiness, best_band, best_coverage  = self.get_band_c(ccy, tf, idx_start, idx_end, threshold, tolerance, force_reset)
+        best_emptiness, best_band, best_coverage  = self.get_band_c_threadsafe(ccy, tf, idx_start, idx_end, threshold, tolerance, force_reset=force_reset)
         
         fig, axlist = mpf.plot(
             df_slice_wide,
@@ -214,6 +223,7 @@ class MY_RANGE:
         if save_path:
             fig.savefig(save_path)
             plt.close(fig)
+            # del fig, axlist, df_slice_wide, df_slice, best_emptiness, best_band, best_coverage 
         else:
             plt.show()
 

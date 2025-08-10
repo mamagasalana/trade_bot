@@ -18,3 +18,4 @@ config.json
 *.log
 **/*.egg-info/*
 **/dist/*
+*.mp4
