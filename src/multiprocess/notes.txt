@@ -1,0 +1,1 @@
+This folder contains script that runs with library multiprocessing 

@@ -166,9 +166,193 @@ static PyObject* get_band(PyObject* self, PyObject* args) {
     }
 }
 
+/* ------------------------------- method ----------------------------------- */
+static PyObject* get_band_threadsafe(PyObject* self, PyObject* args) {
+    PyObject *lows_obj=NULL, *highs_obj=NULL, *prices_obj=NULL;
+    double threshold, tolerance;
+    int VERBOSE;
+
+    if (!PyArg_ParseTuple(args, "OOOddi",
+                          &lows_obj, &highs_obj, &prices_obj,
+                          &threshold, &tolerance, &VERBOSE)) {
+        return NULL;
+    }
+
+    /* Acquire NumPy arrays (read-only) while we still hold the GIL */
+    PyArrayObject *lows  = (PyArrayObject*)PyArray_FROM_OTF(lows_obj,  NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *highs = (PyArrayObject*)PyArray_FROM_OTF(highs_obj, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    PyArrayObject *prices= (PyArrayObject*)PyArray_FROM_OTF(prices_obj,NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+
+    if (!lows || !highs || !prices) {
+        Py_XDECREF(lows); Py_XDECREF(highs); Py_XDECREF(prices);
+        return NULL;
+    }
+    if (PyArray_SIZE(lows) != PyArray_SIZE(highs)) {
+        Py_DECREF(lows); Py_DECREF(highs); Py_DECREF(prices);
+        PyErr_SetString(PyExc_ValueError, "lows and highs must have same length");
+        return NULL;
+    }
+
+    const npy_intp n = PyArray_SIZE(lows);
+    const npy_intp m = PyArray_SIZE(prices);
+
+    /* Make private C copies so we can safely release the GIL */
+    double *lo_c = (double*)malloc(sizeof(double) * (size_t)n);
+    double *hi_c = (double*)malloc(sizeof(double) * (size_t)n);
+    double *pz_c = (double*)malloc(sizeof(double) * (size_t)m);
+    if (!lo_c || !hi_c || !pz_c) {
+        free(lo_c); free(hi_c); free(pz_c);
+        Py_DECREF(lows); Py_DECREF(highs); Py_DECREF(prices);
+        PyErr_NoMemory();
+        return NULL;
+    }
+    memcpy(lo_c, PyArray_DATA(lows),   sizeof(double) * (size_t)n);
+    memcpy(hi_c, PyArray_DATA(highs),  sizeof(double) * (size_t)n);
+    memcpy(pz_c, PyArray_DATA(prices), sizeof(double) * (size_t)m);
+
+    /* Done with the NumPy inputs themselves */
+    Py_DECREF(lows); Py_DECREF(highs); Py_DECREF(prices);
+
+    /* Results of the heavy search (computed without GIL) */
+    double best_width = -1.0;
+    double best_a = NAN, best_b = NAN;
+    double best_emptiness = 0.0;
+    npy_intp best_s_first = -1, best_s_last = -1, best_r_first = -1, best_r_last = -1;
+    int have_best = 0;
+
+    /* Optional: collect a tiny amount of verbose info to print later */
+    int do_verbose = VERBOSE != 0; /* avoid printing while GIL is released */
+
+    /* -------------------- heavy numeric loop without GIL ------------------- */
+    Py_BEGIN_ALLOW_THREADS
+
+    for (npy_intp i = 0; i < m; ++i) {
+        double a = pz_c[i];
+        for (npy_intp j = i + 1; j < m; ++j) {
+            double b = pz_c[j];
+            if (b <= a) continue;
+            double brange = b - a;
+
+            /* pre-check: replicate "count >= 4" logic quickly */
+            int count = 0, is_support = 0, is_resistance = 0;
+            for (npy_intp k = 0; k < n; ++k) {
+                int sidx = (lo_c[k] <= a && hi_c[k] >= a);
+                int ridx = (lo_c[k] <= b && hi_c[k] >= b);
+
+                if (sidx && ridx) count += 2;
+                if (!is_resistance && ridx) { is_resistance = 1; is_support = 0; count += 1; }
+                if (!is_support    && sidx) { is_support    = 1; is_resistance = 0; count += 1; }
+
+                if (count >= 4) break;
+            }
+            if (count < 4) continue;
+
+            /* first/last hits for a and b */
+            npy_intp s_first, s_last, r_first, r_last;
+            if (!any_true_first_last(lo_c, hi_c, n, a, &s_first, &s_last)) continue;
+            if (!any_true_first_last(lo_c, hi_c, n, b, &r_first, &r_last)) continue;
+
+            /* mean coverage */
+            double sum_cov = 0.0;
+            for (npy_intp k = 0; k < n; ++k) {
+                int s2 = (s_first >= 0 && k >= s_first && k <= s_last);
+                int r2 = (r_first >= 0 && k >= r_first && k <= r_last);
+
+                if (s2 && r2) {
+                    sum_cov += 1.0;
+                } else if (r2) {
+                    double v = b - lo_c[k];
+                    if (v > 0.0) sum_cov += (v / brange);
+                } else if (s2) {
+                    double v = hi_c[k] - a;
+                    if (v > 0.0) sum_cov += (v / brange);
+                }
+            }
+            double mean_cov   = sum_cov / (double)n;
+            double emptiness  = 1.0 - mean_cov;
+
+            /* threshold/tolerance check */
+            if (fabs(emptiness - threshold) <= tolerance + 1e-12) {
+                double width = brange;
+                if (width > best_width) {
+                    best_width = width;
+                    best_a = a; best_b = b;
+                    best_emptiness = emptiness;
+                    best_s_first = s_first; best_s_last = s_last;
+                    best_r_first = r_first; best_r_last = r_last;
+                    have_best = 1;
+                }
+            }
+        }
+    }
+
+    Py_END_ALLOW_THREADS
+    /* ------------------ end heavy numeric loop without GIL ----------------- */
+
+    /* Build outputs (NumPy objects) with the GIL held */
+    PyObject *result = NULL;
+
+    if (!have_best) {
+        /* Clean up and return None, (nan,nan), None */
+        free(lo_c); free(hi_c); free(pz_c);
+        Py_INCREF(Py_None);
+        Py_INCREF(Py_None);
+        result = Py_BuildValue("(O,(d,d),O)", Py_None, NAN, NAN, Py_None);
+        return result;
+    }
+
+    /* Create coverage arrays and fill them (recompute coverage in a light pass) */
+    npy_intp dims[1] = { n };
+    PyArrayObject *upper_arr_best = (PyArrayObject*)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    PyArrayObject *lower_arr_best = (PyArrayObject*)PyArray_SimpleNew(1, dims, NPY_DOUBLE);
+    if (!upper_arr_best || !lower_arr_best) {
+        Py_XDECREF(upper_arr_best);
+        Py_XDECREF(lower_arr_best);
+        free(lo_c); free(hi_c); free(pz_c);
+        return NULL;
+    }
+
+    double *upper = (double*)PyArray_DATA(upper_arr_best);
+    double *lower = (double*)PyArray_DATA(lower_arr_best);
+    for (npy_intp k = 0; k < n; ++k) { upper[k] = NAN; lower[k] = NAN; }
+
+    for (npy_intp k = 0; k < n; ++k) {
+        int s2k = (best_s_first >= 0 && k >= best_s_first && k <= best_s_last);
+        int r2k = (best_r_first >= 0 && k >= best_r_first && k <= best_r_last);
+
+        if (s2k && r2k) {
+            upper[k] = best_b; lower[k] = best_a;
+        } else if (r2k) {
+            upper[k] = best_b;
+            lower[k] = (lo_c[k] < best_b ? lo_c[k] : best_b); /* min(b, low) */
+        } else if (s2k) {
+            upper[k] = (hi_c[k] > best_a ? hi_c[k] : best_a); /* max(a, high) */
+            lower[k] = best_a;
+        }
+    }
+
+    if (do_verbose) {
+        /* Print only after reacquiring the GIL to avoid interleaving UB */
+        /* NOTE: keep it minimal; real logging should be done in Python */
+        fprintf(stdout, "best emptiness=%.6f, a=%.6f, b=%.6f, width=%.6f\n",
+                best_emptiness, best_a, best_b, best_width);
+        fflush(stdout);
+    }
+
+    PyObject *band = Py_BuildValue("(d,d)", best_a, best_b);
+    PyObject *cov  = Py_BuildValue("(NN)", upper_arr_best, lower_arr_best); /* steals refs */
+    result = Py_BuildValue("(d,O,O)", best_emptiness, band, cov);
+    Py_DECREF(band);
+    Py_DECREF(cov);
+
+    free(lo_c); free(hi_c); free(pz_c);
+    return result;
+}
+
 static PyMethodDef Methods[] = {
 
     {"get_band", get_band, METH_VARARGS,  "get band(\n"},
+    {"get_band_threadsafe", get_band_threadsafe, METH_VARARGS,  "get band_threadsafe(\n"},
     { NULL, NULL, 0, NULL }
 };
 

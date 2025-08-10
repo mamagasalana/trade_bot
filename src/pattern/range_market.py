@@ -10,6 +10,7 @@ from tqdm import tqdm
 import os
 from moviepy import ImageSequenceClip
 import range_market as rngmkt
+from concurrent.futures import ThreadPoolExecutor
 
 
 r = reader2()
@@ -17,9 +18,14 @@ r = reader2()
 my_cache =  CACHE2('range_market.cache')
 
 class MY_RANGE:
-    def __init__(self):
+    def __init__(self, max_workers=None):
         self.dfs = {}
         self.VERBOSE = False
+        if max_workers is None:
+            self.max_workers = os.cpu_count()-3
+        else:
+            self.max_workers = min(os.cpu_count()-3, max_workers)
+
 
     def get_file(self, ccy, tf):
         if not (ccy, tf) in self.dfs:
@@ -112,43 +118,52 @@ class MY_RANGE:
         return rngmkt.get_band(lows, highs, prices, threshold, tolerance, int(self.VERBOSE))
 
     @my_cache
-    def get_band(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False):
-        """
-        Find widest price band [a, b] such that |emptiness - threshold| < tolerance.
-        Returns: (emptiness, (a, b))
-        """
+    def get_band_c_threadsafe(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False):
         df_slice = self.get_file(ccy, tf).iloc[idx_start:idx_end]
-        lows = df_slice['Low'].values
-        highs = df_slice['High'].values
-        prices = np.unique(np.concatenate([lows, highs]))
+        lows  = np.asarray(df_slice['Low'],  dtype=np.float64)
+        highs = np.asarray(df_slice['High'], dtype=np.float64)
+        prices = np.unique(np.concatenate([lows, highs])).astype(np.float64)
+
+        return rngmkt.get_band_threadsafe(lows, highs, prices, threshold, tolerance, int(self.VERBOSE))
+    
+    # @my_cache
+    # def get_band(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False):
+    #     """
+    #     Find widest price band [a, b] such that |emptiness - threshold| < tolerance.
+    #     Returns: (emptiness, (a, b))
+    #     """
+    #     df_slice = self.get_file(ccy, tf).iloc[idx_start:idx_end]
+    #     lows = df_slice['Low'].values
+    #     highs = df_slice['High'].values
+    #     prices = np.unique(np.concatenate([lows, highs]))
         
-        best_band = (np.nan, np.nan)
-        best_width = -np.inf
-        best_emptiness = None
-        best_coverage = None
+    #     best_band = (np.nan, np.nan)
+    #     best_width = -np.inf
+    #     best_emptiness = None
+    #     best_coverage = None
 
-        ret = []
+    #     ret = []
 
-        for i in range(len(prices)):
-            for j in range(i + 1, len(prices)):
-                a = prices[i]
-                b = prices[j]
-                emptiness, coverage = self.__compute_emptiness_from_barwise_overlap(lows, highs, a, b)
-                if emptiness == 1:
-                    continue
-                if self.VERBOSE:
-                    print('%.5f, %.5f, %.5f' % (emptiness, a, b))
+    #     for i in range(len(prices)):
+    #         for j in range(i + 1, len(prices)):
+    #             a = prices[i]
+    #             b = prices[j]
+    #             emptiness, coverage = self.__compute_emptiness_from_barwise_overlap(lows, highs, a, b)
+    #             if emptiness == 1:
+    #                 continue
+    #             if self.VERBOSE:
+    #                 print('%.5f, %.5f, %.5f' % (emptiness, a, b))
 
-                if abs(emptiness - threshold) <= tolerance + 1e-12:
-                    width = b - a
-                    ret.append((emptiness, a, b, width))
-                    if width > best_width:
-                        best_width = width
-                        best_band = (a, b)
-                        best_emptiness = emptiness
-                        best_coverage = coverage
+    #             if abs(emptiness - threshold) <= tolerance + 1e-12:
+    #                 width = b - a
+    #                 ret.append((emptiness, a, b, width))
+    #                 if width > best_width:
+    #                     best_width = width
+    #                     best_band = (a, b)
+    #                     best_emptiness = emptiness
+    #                     best_coverage = coverage
 
-        return best_emptiness, best_band, best_coverage
+    #     return best_emptiness, best_band, best_coverage
 
     def view_video(self, ccy, tf, interval, threshold=0.15, tolerance=0.005):
         os.makedirs("frames", exist_ok=True)
@@ -167,7 +182,7 @@ class MY_RANGE:
         df = self.get_file(ccy, tf)
         df_slice_wide = df.iloc[max(0, idx_start-sz):min(df.shape[0], idx_end+sz*4)]
         df_slice = df.iloc[idx_start:idx_end]
-        best_emptiness, best_band, best_coverage  = self.get_band(ccy, tf, idx_start, idx_end, threshold, tolerance, force_reset)
+        best_emptiness, best_band, best_coverage  = self.get_band_c(ccy, tf, idx_start, idx_end, threshold, tolerance, force_reset)
         
         fig, axlist = mpf.plot(
             df_slice_wide,
@@ -202,25 +217,25 @@ class MY_RANGE:
         else:
             plt.show()
 
-    def get_band_by_batch(self,  ccy, tf, result=False, force_reset=False):
-        df = self.get_file(ccy, tf)
+    # def get_band_by_batch(self,  ccy, tf, result=False, force_reset=False):
+    #     df = self.get_file(ccy, tf)
         
-        combinations = [
-            (idx_start, idx_end, threshold / 10)
-            for idx_start in range(0, len(df), 50)
-            for idx_end in range(idx_start+50, idx_start + 500, 50)
-            for threshold in range(1, 5)
-        ]
+    #     combinations = [
+    #         (idx_start, idx_end, threshold / 10)
+    #         for idx_start in range(0, len(df), 50)
+    #         for idx_end in range(idx_start+50, idx_start + 500, 50)
+    #         for threshold in range(1, 5)
+    #     ]
 
-        ret = []
-        for idx_start, idx_end, threshold in tqdm(combinations):
-            # just cache data?
-            best_emptiness, best_band, _ = self.get_band(ccy, tf, idx_start, idx_end, threshold, 0.05, force_reset=force_reset)
-            if result:
-                ret.append([ccy, tf, idx_start, idx_end, best_emptiness, best_band[0], best_band[1]])
+    #     ret = []
+    #     for idx_start, idx_end, threshold in tqdm(combinations):
+    #         # just cache data?
+    #         best_emptiness, best_band, _ = self.get_band(ccy, tf, idx_start, idx_end, threshold, 0.05, force_reset=force_reset)
+    #         if result:
+    #             ret.append([ccy, tf, idx_start, idx_end, best_emptiness, best_band[0], best_band[1]])
 
-        if result:
-            return ret
+    #     if result:
+    #         return ret
         
 
     def get_band_by_batch_c(self,  ccy, tf, result=False, force_reset=False):
@@ -243,6 +258,33 @@ class MY_RANGE:
         if result:
             return ret
         
+    def get_band_by_batch_c_threadsafe(self, ccy, tf, result=False, force_reset=False):
+        df = self.get_file(ccy, tf)
+
+        combinations = [
+            (idx_start, idx_end, threshold / 10)
+            for idx_start in range(0, len(df), 1)
+            for idx_end in range(idx_start+50, idx_start + 500, 50)
+            for threshold in range(1, 5)
+        ]
+
+        def process_combination(combo):
+            idx_start, idx_end, threshold = combo
+            best_emptiness, best_band, _ = self.get_band_c_threadsafe(
+                ccy, tf, idx_start, idx_end, threshold, 0.05, force_reset=force_reset
+            )
+            if result:
+                return [ccy, tf, idx_start, idx_end, best_emptiness, best_band[0], best_band[1]]
+
+        ret = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            for out in tqdm(executor.map(process_combination, combinations), total=len(combinations)):
+                if out:
+                    ret.append(out)
+
+        if result:
+            return ret
+                
 
 if __name__ == '__main__':
     import sys

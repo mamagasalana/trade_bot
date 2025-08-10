@@ -102,7 +102,7 @@ class CACHE2:
             for name, value in bound.arguments.items():
                 if name != "self":
                     key_elements[name]=value
-                if name == 'force_reset':
+                elif name == 'force_reset':
                     force_reset = value
 
             for k in self.optional_attrs:
