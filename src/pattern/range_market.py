@@ -122,6 +122,7 @@ class MY_RANGE:
 
     @my_cache
     def get_band_c_threadsafe(self, ccy, tf, idx_start, idx_end, threshold=0.15, tolerance=0.005, force_reset=False):
+        if self.VERBOSE: print('debug')
         df_slice = self.get_file(ccy, tf).iloc[idx_start:idx_end]
         lows  = np.asarray(df_slice['Low'],  dtype=np.float64)
         highs = np.asarray(df_slice['High'], dtype=np.float64)

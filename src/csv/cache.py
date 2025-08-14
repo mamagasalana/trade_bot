@@ -4,7 +4,7 @@ import logging
 import hashlib
 from functools import wraps
 import inspect
-
+import time
 
 class CACHE:
     def __init__(self, filename):
@@ -100,10 +100,10 @@ class CACHE2:
             force_reset = False
             # add every non-self argument in deterministic name=value form
             for name, value in bound.arguments.items():
-                if name != "self":
-                    key_elements[name]=value
-                elif name == 'force_reset':
+                if name == 'force_reset':
                     force_reset = value
+                elif name != "self":
+                    key_elements[name]=value
 
             for k in self.optional_attrs:
                 v = getattr(bound_self, k, '')
@@ -134,6 +134,12 @@ class CACHE2:
                     pickle.dump(result, f)
                     logging.debug(f"[CACHE2] Cache saved: {filename}")
             except Exception as e:
-                logging.warning(f"[CACHE2] Failed to save cache: {e}")
+                try:
+                    time.sleep(1)
+                    with open(filename, 'wb') as f:
+                        pickle.dump(result, f)
+                        logging.debug(f"[CACHE2] Cache saved: {filename}")
+                except Exception as e:
+                    logging.warning(f"[CACHE2] Failed to save cache: {e}")
             return result
         return wrapper
