@@ -389,7 +389,7 @@ my_cache3 =  CACHE2('corr3.cache', ['windows', 'CURRENCIES', 'days_range'])
 class CORR3:
     def __init__(self, ccys=['AUD', 'JPY', 'USD', 'GBP', 'CAD', 'CHF', 'EUR', 'XAU', 'XAG', 'OIL', 'GAS'], simulation=False, force_reset=False):
         
-        self.windows = range(1, 100, 1)
+        self.windows = range(10, 1000, 10)
         self.CURRENCIES = ccys
         self.c = CCY_STR(ccys)
         self.sim = SIMULATION()
@@ -401,7 +401,7 @@ class CORR3:
             self.days_range  = range(10, 100, 10)
             self.df = self.sim.df
         else:
-            self.days_range  = range(1, 100, 1)
+            self.days_range  = range(10, 1000, 10)
             self.df = self.get_all_pairs(force_reset)
 
     @property

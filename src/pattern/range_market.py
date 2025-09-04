@@ -1,7 +1,7 @@
 
 import numpy as np
 import pandas as pd
-from src.csv.cache import CACHE2
+from src.csv.cache import CACHE3
 from src.csv.reader  import reader2
 
 import shlex
@@ -18,7 +18,7 @@ import gc
 
 r = reader2()
 
-my_cache =  CACHE2('range_market.cache')
+my_cache =  CACHE3('range_market.cache')
 
 class MY_RANGE:
     def __init__(self, max_workers=None):
@@ -205,6 +205,9 @@ class MY_RANGE:
         ax = axlist[0]
         ax.plot([], [], label=' ')
 
+        ax.axvline(min(idx_start, sz), color='green', linestyle='--', linewidth=1.2, label='start' , alpha=0.5)
+        ax.axvline(min(idx_start, sz) +50, color='green', linestyle='--', linewidth=1.2, label='end', alpha=0.5)
+        
         if best_coverage:
             
             graph_idx = np.arange(len(df_slice)) + min(idx_start, sz)
@@ -218,6 +221,7 @@ class MY_RANGE:
             # Support & Resistance lines
             ax.axhline(min(best_band), color='green', linestyle='--', linewidth=1.2, label='Support')
             ax.axhline(max(best_band), color='red', linestyle='--', linewidth=1.2, label='Resistance')
+
 
         ax.legend(loc='center left', bbox_to_anchor=(1.0, 0.5))
 
@@ -275,8 +279,8 @@ class MY_RANGE:
         combinations = [
             (idx_start, idx_end, threshold / 10)
             for idx_start in range(0, len(df), 1)
-            for idx_end in range(idx_start+50, idx_start + 500, 50)
-            for threshold in range(1, 5)
+            for idx_end in range(idx_start+10, idx_start + 500, 10)
+            for threshold in range(1, 11)
         ]
 
         def process_combination(combo):
