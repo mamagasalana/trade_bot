@@ -6,11 +6,14 @@ from functools import wraps
 import inspect
 import time
 import  zlib
-from peewee import SqliteDatabase, Model, DatabaseProxy, TextField, BlobField, OperationalError, FloatField, SQL
+from peewee import SqliteDatabase, Model, DatabaseProxy, TextField, BlobField, OperationalError, FloatField, SQL, fn
 from queue import Queue, Empty, Full
 from threading import Thread, Event
 import random
 import json
+
+from functools import reduce
+from operator import and_
 
 class CACHE:
     def __init__(self, filename):
@@ -388,3 +391,55 @@ class CACHE3:
 
         return wrapper
 
+    def _json_path(self, key):
+        # allow 'a.b.c' or ('a','b','c')
+        parts = key if isinstance(key, (list, tuple)) else key.split('.')
+        path = '$'
+        for p in parts:
+            # simple keys: dot notation; otherwise use ['...'] quoting
+            if p.isidentifier():
+                path += f'.{p}'
+            else:
+                safe = p.replace("'", "''")
+                path += f"['{safe}']"
+        return path
+
+    def build_meta_filter(self, field, filters: dict):
+        """
+        field: the Peewee field holding JSON text (e.g., CacheRow.meta)
+        filters: e.g. {"ccy": "CADCHF", "tf": ["1h","4h"], "fast": {"$gte": 400, "$lt": 600}}
+        returns: a Peewee expression you can pass to .where(...)
+        """
+        clauses = []
+        for key, val in filters.items():
+            expr = fn.json_extract(field, self._json_path(key))
+            if isinstance(val, (list, tuple, set)):
+                vals = list(val)
+                if not vals:  # empty IN should match nothing
+                    clauses.append(False)
+                else:
+                    clauses.append(expr.in_(vals))
+            elif isinstance(val, dict):
+                # supported operators
+                for op, v in val.items():
+                    if op == '$gt':   clauses.append(expr >  v)
+                    elif op == '$gte': clauses.append(expr >= v)
+                    elif op == '$lt':  clauses.append(expr <  v)
+                    elif op == '$lte': clauses.append(expr <= v)
+                    elif op == '$ne':  clauses.append(expr != v)
+                    elif op == '$in':  clauses.append(expr.in_(list(v)))
+                    else:
+                        raise ValueError(f"Unsupported operator: {op}")
+            else:
+                clauses.append(expr == val)
+        if not clauses:
+            return None
+        return reduce(and_, clauses)
+
+    def qry(self, filters):
+        with self.db.connection_context():
+            where_expr = self.build_meta_filter(CacheRow.meta, filters)
+            q = CacheRow.select()
+            if where_expr is not None:
+                q = q.where(where_expr)
+            return list(q)

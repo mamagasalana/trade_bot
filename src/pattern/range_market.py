@@ -302,15 +302,27 @@ class MY_RANGE:
                 
 
 if __name__ == '__main__':
-    import sys
-
-    mr = MY_RANGE()
-    # a,b,c = mr.get_band('AUDUSD', '1h', 11700, 11800, threshold=0.1, tolerance=0.05, force_reset=True)
-
-    mr.VERBOSE= True
+    from peewee import fn
+    import pickle
+    import json
+    from src.csv.cache import CacheRow
     
-    if len(sys.argv) > 1:
-        if sys.argv[1] == '0':
-            a,b,c = mr.get_band('AUDUSD', '1h', 65400, 65800, threshold=0.4, tolerance=0.05, force_reset=True)
-        else:
-            a,b,c = mr.get_band_c('AUDUSD', '1h', 65400, 65800, threshold=0.4, tolerance=0.05, force_reset=True)
+    with my_cache.db.connection_context():
+        row = (CacheRow
+            .select()
+            .where(fn.json_extract(CacheRow.meta, '$.ccy') == 'AUDUSD'))
+        
+    bb = list(row)
+
+
+    out = []
+    for b in bb:
+        emptiness, (s1, s2), _ = pickle.loads(b.v)
+        desc = json.loads(b.meta)
+        desc['emptiness'] = emptiness
+        desc['upper'] = max(s1, s2)
+        desc['lower'] = min(s1, s2)
+        out.append(desc)
+
+    df = pd.DataFrame(out)
+    df.to_csv('AUDUSD_1h.csv', index=False)
