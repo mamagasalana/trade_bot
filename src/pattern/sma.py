@@ -6,6 +6,7 @@ import os
 import json 
 import pandas as pd
 import pickle
+import numpy as np
 
 my_cache =  CACHE3('sma.cache')
 r = reader2()
@@ -24,7 +25,7 @@ class sma:
         return self.dfs[(ccy, tf)]
 
     def get_raw(self, ccy, tf, fast, slow, scale):
-        df = self.get_file(ccy, tf)
+        df = self.get_file(ccy, tf).copy()
         df['profit'] =  df['Close'].diff().shift(-1)
         df['ema_f'] = df['Close'].ewm(span=fast, adjust=False).mean()
         df['ema_s'] = df['Close'].ewm(span=slow, adjust=False).mean()
@@ -38,6 +39,35 @@ class sma:
         df.loc[df.sig < -df.dead, 'direction'] = -1
         return df
     
+
+    def score(self, g):
+        p = g['profit']
+        wins = p[p > 0]
+        losses = p[p <= 0]
+        wr = wins.size / p.size if p.size else np.nan
+        avg_win = wins.mean() if wins.size else 0.0
+        avg_loss = -losses.mean() if losses.size else 0.0  # positive magnitude
+        sum_w = wins.sum()
+        sum_l = -losses.sum()  # positive magnitude
+        pf = (sum_w / sum_l) if sum_l > 0 else np.inf
+        payoff = (avg_win / avg_loss) if avg_loss > 0 else np.inf
+        return pd.Series({
+            'n': p.size,
+            'win_rate': wr,
+            'count_win' : wins.size,
+            'count_loss' : losses.size,
+            'sum_win' : sum_w,
+            'sum_loss' : sum_l, 
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'payoff_ratio': payoff,
+            'profit_factor': pf,
+            'expectancy_per_trade': p.mean(),
+            'median': p.median(),
+            'iqr': p.quantile(0.75) - p.quantile(0.25),
+            'std': p.std(ddof=1)
+        })
+
     @my_cache
     def get_profit(self, ccy, tf, fast, slow, scale=0.2, force_reset=False):
         df =  self.get_raw(ccy, tf, fast, slow, scale)
@@ -47,23 +77,13 @@ class sma:
         # group by consecutive direction streak
         df["groupref"] = (df['direction'] != df['direction'].shift()).cumsum()
         df2 = df.groupby(["groupref", "direction"], as_index=False).profit.sum()
-                
-        df2_count = pd.crosstab(
-                index=df2['direction'],
-                columns=df2['profit'].gt(0),   # True = profit>0
-                values=df2['profit'],
-                aggfunc='count'
-            ).rename(columns={True:'count>0', False:'count<0'}).to_dict()
-
-        df2_sum= pd.crosstab(
-                index=df2['direction'],
-                columns=df2['profit'].gt(0),   # True = profit>0
-                values=df2['profit'],
-                aggfunc='sum'
-            ).rename(columns={True:'sum>0', False:'sum<0'}).to_dict()
-               
-        df2_count.update(df2_sum)
-        return df2_count
+        ret = df2.groupby('direction', group_keys=False, dropna=False).apply(self.score, include_groups=False)
+        ret['meta_ccy'] = ccy
+        ret['meta_tf'] = tf
+        ret['meta_fast'] = fast
+        ret['meta_slow'] = slow
+        ret['meta_scale'] = scale
+        return ret.to_dict()
     
     def get_profit_by_batch(self, ccy, tf, result=False, force_reset=False):
 
