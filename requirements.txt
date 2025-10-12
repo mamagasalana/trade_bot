@@ -22,3 +22,8 @@ pykalman
 pomegranate
 sodapy
 moviepy
+global_macro_data
+pymc
+aesara
+aeppl
+arviz
