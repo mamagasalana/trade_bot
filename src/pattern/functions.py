@@ -152,5 +152,150 @@ def get_dendrogram(df, distance_threshold=5, method=None, fig=False):
         return fig
 
 
+def build_fut_mat(x: pd.Series, size=0) -> np.ndarray:
+    return np.column_stack([x.shift(-h).to_numpy() for h in range(1, size + 1)])
+
+def first_true_idx(mat: pd.DataFrame, size=0) -> pd.DataFrame:
+    # argmax gives 0 if all False, so detect rows with any True
+    any_true = mat.any(axis=1)
+    idx = mat.idxmax(axis=1) + 1       # 1..k2 for first True, 1 if none
+    idx[~any_true] = size + 1            # set sentinel for "no hit"
+    return idx
+
+
+def get_barrier(df, group_keys, k2 =5, ratio=0.5, overlap=True, debug=False):
+
+    assert "thresh" in df.columns
+    assert "trigger" in df.columns
+    
+    g =df.groupby(group_keys)["Close"]
+    fut_close  = g.transform(lambda col: build_fut_mat(col, k2).tolist())
+    fut = pd.DataFrame(fut_close.tolist())
+    
+    q = df['thresh']
+    
+    if debug:
+        df['bull_tp'] = df["Close"] * (1.0 + q * ratio)
+        df['bear_tp'] = df["Close"] * (1.0 - q * ratio)
+        df['fut'] = fut_close
+
+
+        bull_mat = fut >= df.bull_tp.to_numpy()[:, None]     
+        bear_mat = fut <= df.bear_tp.to_numpy()[:, None] 
+
+        # First-touch indices (in bars ahead) for each row
+        df['bull_idx'] = first_true_idx(bull_mat, k2)
+        df['bear_idx'] = first_true_idx(bear_mat, k2)
+        df['state'] = np.where(df.trigger== 1, 
+                        np.where(df['bull_idx'] < df['bear_idx'],  1, np.where(df['bear_idx'] < df['bull_idx'], -1, 0)),
+                        np.where(df.trigger== -1, 
+                            np.where(df['bull_idx'] < df['bear_idx'], -1, np.where(df['bear_idx'] < df['bull_idx'], 1, 0)),
+                            np.nan
+                            ))
+        
+        has_full = (
+            df.groupby(group_keys)["Close"]
+                .transform(lambda s_: s_.rolling(k2, min_periods=k2).count().shift(-k2))
+                .notna()
+        )
+
+        #this remove overlapping trends
+        df['prev_trigger_sum'] = df.groupby(group_keys).trigger.transform(lambda s_: abs(s_).astype(int).rolling(k2, min_periods=1).sum().shift(1).fillna(0))
+        
+        if overlap:
+            df['keep'] = (df.trigger!=0) & has_full & (df.prev_trigger_sum == 0)
+        else:
+            df['keep'] = (df.trigger!=0) & has_full 
+
+        return df
+    else:
+        bull_tp = df["Close"] * (1.0 + q * ratio)
+        bear_tp = df["Close"] * (1.0 - q * ratio)
+
+        bull_mat = fut >= bull_tp.to_numpy()[:, None]     
+        bear_mat = fut <= bear_tp.to_numpy()[:, None] 
+
+        # First-touch indices (in bars ahead) for each row
+        bull_idx= first_true_idx(bull_mat, k2)
+        bear_idx = first_true_idx(bear_mat, k2)
+        state = np.where(df.trigger== 1, 
+                        np.where(bull_idx< bear_idx,  1, np.where(bear_idx < bull_idx, -1, 0)),
+                        np.where(df.trigger== -1, 
+                            np.where(bull_idx < bear_idx, -1, np.where(bear_idx < bull_idx, 1, 0)),
+                            np.nan
+                            ))
+        
+        has_full = (
+            df.groupby(group_keys)["Close"]
+                .transform(lambda s_: s_.rolling(k2, min_periods=k2).count().shift(-k2))
+                .notna()
+        )
+
+        #this remove overlapping trends
+        prev_trigger_sum = df.groupby(group_keys).trigger.transform(lambda s_: abs(s_).astype(int).rolling(k2, min_periods=1).sum().shift(1).fillna(0))
+        
+        if overlap:
+            keep = (df.trigger!=0) & has_full & (prev_trigger_sum == 0)
+        else:
+            keep = (df.trigger!=0) & has_full 
+
+        ret =  pd.concat([pd.Series(state), keep], axis=1)
+        ret.columns = ['state', 'keep']
+        return ret
+        
+
+ 
+def get_barrier_by_batch(dfraw, group_keys, k2 =5, ratio=0.5, overlap=True, debug=False):
+
+    assert "thresh" in dfraw.columns
+    assert "trigger" in dfraw.columns
+    
+    
+    g =dfraw.groupby(group_keys)
+    out= []
+    for _ , df in g:
+        q = df['thresh']
+        fut_close  =build_fut_mat(df.Close, k2)
+        fut = pd.DataFrame(fut_close.tolist())
+    
+    
+        bull_tp = df["Close"] * (1.0 + q * ratio)
+        bear_tp = df["Close"] * (1.0 - q * ratio)
+
+        bull_mat = fut >= bull_tp.to_numpy()[:, None]     
+        bear_mat = fut <= bear_tp.to_numpy()[:, None] 
+
+        # First-touch indices (in bars ahead) for each row
+        bull_idx= first_true_idx(bull_mat, k2)
+        bear_idx = first_true_idx(bear_mat, k2)
+        state = np.where(df.trigger== 1, 
+                        np.where(bull_idx< bear_idx,  1, np.where(bear_idx < bull_idx, -1, 0)),
+                        np.where(df.trigger== -1, 
+                            np.where(bull_idx < bear_idx, -1, np.where(bear_idx < bull_idx, 1, 0)),
+                            np.nan
+                            ))
+        
+        has_full = (
+            df.groupby(group_keys)["Close"]
+                .transform(lambda s_: s_.rolling(k2, min_periods=k2).count().shift(-k2))
+                .notna()
+        )
+
+        #this remove overlapping trends
+        prev_trigger_sum = df.groupby(group_keys).trigger.transform(lambda s_: abs(s_).astype(int).rolling(k2, min_periods=1).sum().shift(1).fillna(0))
+        
+        if overlap:
+            keep = (df.trigger!=0) & has_full & (prev_trigger_sum == 0)
+        else:
+            keep = (df.trigger!=0) & has_full 
+
+        ret = pd.concat([pd.Series(state), keep.reset_index(drop=True)], axis=1)
+        ret.index= keep.index
+        out.append(ret)
+    final = pd.concat(out)
+    final.columns = ['state', 'keep']
+    return final.sort_index()
+
+
 if __name__ == '__main__':
     pass
