@@ -67,6 +67,10 @@ class MOMENTUM:
             raw = pd.concat(dfs)
             raw['year'] = raw.Date.dt.year
             raw['gap_pct'] = raw['gap_min_pct'].combine_first(raw['gap_max_pct'])
+            raw['trigger'] =np.where(pd.notnull(raw["gap_max_pct"]), 1, 
+                    np.where(pd.notnull(raw["gap_min_pct"]), -1, 0)
+                    )
+        
             self.raw[tf] = raw.copy()
         return self.raw[tf]
     
@@ -131,19 +135,14 @@ class MOMENTUM:
     def _get_barrier(self, tf='4h', thresh_col='gap_q75', barrier_window=5, ratio=0.5, overlap=False, debug=True, force_reset=False):
         raw2 = self._get_barrier_preprocess(tf)
         raw2['thresh'] = raw2[thresh_col]
-        raw2['trigger'] =np.where(pd.notnull(raw2["gap_max_pct"]), 1, 
-                np.where(pd.notnull(raw2["gap_min_pct"]), -1, 0)
-                )
         ret = get_barrier(raw2, ['ccy', 'window'], k2=barrier_window, ratio=ratio, overlap=overlap, debug=debug)
         return ret
     
     @my_cache
     def _get_barrier2(self, tf='4h', thresh_col='gap_q75', barrier_window=5, ratio=0.5, overlap=False, debug=True, force_reset=False):
+        print('not running from cache', tf, thresh_col, barrier_window, ratio, overlap, debug, force_reset)
         raw2 = self._get_barrier_preprocess(tf)
         raw2['thresh'] = raw2[thresh_col]
-        raw2['trigger'] =np.where(pd.notnull(raw2["gap_max_pct"]), 1, 
-                np.where(pd.notnull(raw2["gap_min_pct"]), -1, 0)
-                )
         ret = get_barrier_by_batch(raw2, ['ccy', 'window'], k2=barrier_window, ratio=ratio, overlap=overlap, debug=debug)
         return ret
     
@@ -152,7 +151,6 @@ class MOMENTUM:
         thresh_options = ['gap_q25', 'gap_q50', 'gap_q75']
         ratio_options = [0.25, 0.5, 0,75, 1.0, 1.25]
         barrier_window_options = list(range(20, 100, 10))
-        overlap_options = [0, 1]
         overlap_options = [0, 1]
 
         # Create Cartesian product of all parameters
@@ -163,5 +161,62 @@ class MOMENTUM:
             overlap_options,
         ))
 
-        for thresh, ratio, barrier_window, overlap in tqdm(all_combs):
-            self._get_barrier2(tf, thresh, barrier_window, ratio, overlap, debug=False, force_reset=force_reset)
+        ret = []
+        mask = self._get_barrier_preprocess(tf).trigger !=0
+        for comb in tqdm(all_combs):
+            thresh, ratio, barrier_window, overlap  = comb
+
+            tmp = self.summary_for_barrier_state(tf, comb, self._get_barrier2(tf, thresh, barrier_window, ratio, overlap, debug=False, force_reset=force_reset)[mask])
+            ret.append(tmp.reset_index())
+
+        return pd.concat(ret, ignore_index=True)
+
+
+    def summary_for_barrier_state(self, tf, comb, df):
+        thresh, ratio, barrier_window, overlap  = comb
+        dfmain = self._get_barrier_preprocess(tf)
+        dfret =pd.concat([dfmain[dfmain.trigger!=0],df], axis=1)
+
+        yy_use =dfret[dfret.keep]
+        # State indicators
+        is_tp  = (yy_use['state'] ==  1)
+        is_none= (yy_use['state'] ==  0)
+        is_sl  = (yy_use['state'] == -1)
+
+        # Threshold masks (cumulative: gap_pct > qX)
+        m25 = yy_use['gap_pct'] > yy_use['gap_q25']
+        m50 = yy_use['gap_pct'] > yy_use['gap_q50']
+        m75 = yy_use['gap_pct'] > yy_use['gap_q75']
+
+        g = yy_use.groupby(['ccy','window'])
+        summary  =g.agg(
+            n_total = ('state', 'size'),
+
+            n_gt25  = ('state', lambda s: m25.loc[s.index].sum()),
+            n_gt50  = ('state', lambda s: m50.loc[s.index].sum()),
+            n_gt75  = ('state', lambda s: m75.loc[s.index].sum()),
+
+            tp_gt25 = ('state', lambda s: (is_tp.loc[s.index][m25.loc[s.index]]).mean()),
+            tp_gt50 = ('state', lambda s: (is_tp.loc[s.index][m50.loc[s.index]]).mean()),
+            tp_gt75 = ('state', lambda s: (is_tp.loc[s.index][m75.loc[s.index]]).mean()),
+
+            none_gt25 = ('state', lambda s: (is_none.loc[s.index][m25.loc[s.index]]).mean()),
+            none_gt50 = ('state', lambda s: (is_none.loc[s.index][m50.loc[s.index]]).mean()),
+            none_gt75 = ('state', lambda s: (is_none.loc[s.index][m75.loc[s.index]]).mean()),
+
+            sl_gt25 = ('state', lambda s: (is_sl.loc[s.index][m25.loc[s.index]]).mean()),
+            sl_gt50 = ('state', lambda s: (is_sl.loc[s.index][m50.loc[s.index]]).mean()),
+            sl_gt75 = ('state', lambda s: (is_sl.loc[s.index][m75.loc[s.index]]).mean()),
+
+
+            gt25 = ('state', lambda s: (is_tp.loc[s.index][m25.loc[s.index]]).mean() - (is_sl.loc[s.index][m25.loc[s.index]]).mean()),
+            gt50 = ('state', lambda s: (is_tp.loc[s.index][m50.loc[s.index]]).mean() - (is_sl.loc[s.index][m50.loc[s.index]]).mean()),
+            gt75 = ('state', lambda s: (is_tp.loc[s.index][m75.loc[s.index]]).mean() - (is_sl.loc[s.index][m75.loc[s.index]]).mean()),
+            
+        )
+
+        summary['thresh'] = thresh
+        summary['ratio'] = ratio
+        summary['barrier_window'] = barrier_window
+        summary['overlap'] = overlap
+        return summary
