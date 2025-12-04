@@ -7,6 +7,7 @@ events*
 files/*
 src/csv/hwqnghwgflanliuvfgqe/*
 *.ipynb
+!jupyter/*.ipynb
 test.py
 *.png
 finagg/*
