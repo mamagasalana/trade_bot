@@ -19,14 +19,14 @@ class MM:
     def __init__(self):
         self.loading= True
 
-    def get_json(self, url):
+    def get_json(self, url, force=False):
         self.loading=True
         self.url = url
         DATA_ID = re.findall(r'charts/(\d+)', url,)[0]
         self.url_data=  f"charts/data/{DATA_ID}"
         self.CHART_JSON_FILE = Path(f"files/macromicro/{DATA_ID}.json")
         
-        if not self.CHART_JSON_FILE.exists():
+        if not self.CHART_JSON_FILE.exists() or force:
             asyncio.run(self.open_chart_page())
 
         js= json.loads(self.CHART_JSON_FILE.read_bytes())
