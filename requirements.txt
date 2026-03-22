@@ -27,3 +27,4 @@ pymc
 aesara
 aeppl
 arviz
+playwright

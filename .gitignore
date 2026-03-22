@@ -20,3 +20,4 @@ config.json
 **/*.egg-info/*
 **/dist/*
 *.mp4
+**/mm_chrome_profile/**
