@@ -18,10 +18,10 @@ class LBMA:
         ret = s.get(url).json()
         return ret
     
-    def get_all(self) -> pd.DataFrame:
+    def get_all(self, force=False) -> pd.DataFrame:
         f =os.path.join(self.folder, 'all.csv')
 
-        if not os.path.exists(f):
+        if not os.path.exists(f) or force:
             out = {}
             for c in COMMODITIES:
                 js = self.get(c)
